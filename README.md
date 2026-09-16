@@ -1,0 +1,60 @@
+# DSH Second Agent Kit
+
+Small, inspectable extensions for DeepSeek Harness 0.1.5-rc.2 on macOS. MIT licensed; independent of DSH Desktop's own license.
+
+## What is included
+
+- A Cordis plugin that preserves upstream decisions and asks before browser writes, borrowing tabs, and common publishing/deletion commands.
+- A subclass of the existing DSH Seatbelt provider. It preserves the host's filesystem policy and denies IP networking and Apple Events in **confined shell processes**. Local computation and workspace writes continue to work. Shell network requests need the host's existing per-call escalation and user approval; dedicated browser, web and model tools use their own policy.
+- A reproducible, version-pinned Engram 0.7.5 patch: hash the entire non-Git workspace path; bind tool storage to the session workspace using AsyncLocalStorage; direct automatic ingestion to project storage. User preferences remain explicit cross-project memories.
+- An independent LibreOffice renderer (`scripts/render-office.py`) using an isolated profile and explicit macOS system fonts to avoid silent Chinese glyph loss. Requires an official LibreOffice install; `--png` requires PyMuPDF.
+- An experimental macOS computer-use patch (**live Word panel test failed; not enabled by this bundle**). It targets a validated focused file-panel element's system XPC process instead of silently posting keys to the host app. No global input broadcast, stale-observation bypass, or new permanent app grant.
+
+## Install the guard
+
+Requirements: macOS 14+, Node 24, DSH 0.1.5-rc.2, existing workspace-write + ask mode. Test in a separate profile first.
+
+```sh
+npm ci
+npm test
+npm pack
+dsh plugin --profile YOUR_TEST_PROFILE add ./dsh-second-agent-kit-0.1.2.tgz
+```
+
+The bundle disables the upstream `sandbox` row, inserts `second-agent-sandbox` with the restricted provider and inserts `second-agent-approval`. If an earlier local `daily-approval` hook is present, disable that duplicate after validating this plugin. Do not disable DSH's own user-approval plugin. No credentials are required or bundled.
+
+Unsupported sandbox runners fail closed rather than silently returning an unconfined command. This version is deliberately macOS-only. Do not enable danger-full-access as a standing default: that mode bypasses the host's confinement by design.
+
+## Engram patch and test
+
+Extract the official `@kenz1117/dsh-engram@0.7.5` npm tarball, then:
+
+```sh
+python3 scripts/patch-engram.py /path/to/pristine-package /path/to/new-package
+# Resolve the patched package's dependencies in an isolated test profile first.
+DSH_ENGRAM_MODULE=/path/to/installed/patched/lib/index.js node tests/memory-runtime.mjs
+```
+
+The runtime test invokes real memory tools against disposable databases and covers concurrent project isolation, updates, forgetting, and explicit user sharing. It needs the package's local embedding runtime; `DSH_EMBEDDING_CACHE` may point to an existing cache. No paid LLM calls are made by this test. Equal Git origins intentionally share memory. Existing legacy database migration is not automatic; the settings UI still uses the host workspace. Test before upgrading or migrating real memories.
+
+## Computer-use patch
+
+See `patches/computer-use.patch` and `patches/computer-use-base.txt`. Apply only to the recorded upstream commit, install dependencies, and run the upstream `pnpm run build` to rebuild JS and native artifacts together. The native helper must be built locally; no unreviewed downloaded executable is supplied here. Tests include a standalone Swift routing-policy check. The upstream package remains MIT (license alongside patch).
+
+## Office rendering
+
+Install LibreOffice from https://www.libreoffice.org/ and PyMuPDF in an independent Python environment. Then run:
+
+```sh
+python scripts/render-office.py input.docx new-preview-directory --png
+```
+
+The helper rejects overwriting a PDF and prints the page count. Inspect every PNG. LibreOffice layout does not prove Microsoft Word layout, and spreadsheet calculation or presentation animation still needs application-specific verification.
+
+## Verification and boundaries
+
+`npm test` verifies hook behavior, fail-closed runner handling, and actual macOS kernel denial of TCP sockets/out-of-workspace writes while permitting a workspace write. Pure Swift policy checks reject inactive, unobserved, untrusted and invalid keyboard targets.
+
+This is **not a universal semantic firewall**. Regex command recognition is advisory; the kernel rule applies only to processes the host confines. Browser/MCP/GUI/plugin capabilities are separate and must retain their approvals. Public publication, payments and destructive operations still require explicit authorization. Unix-domain sockets remain available for local application IPC (including LibreOffice). Local IPC can reach services or proxies with their own authority; this is not an egress boundary against cooperating local services. An allowed workspace file could affect another process that reads it. This project does not claim to eliminate every IPC or indirect-action channel.
+
+No user credentials, conversation logs, personal documents, or production memory databases belong in this repository. See `VALIDATION.md` for current observed results and unresolved cases.

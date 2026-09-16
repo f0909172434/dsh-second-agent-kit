@@ -1,0 +1,35 @@
+import {pathToFileURL} from 'node:url';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+const {apply}=await import(pathToFileURL(process.env.DSH_ENGRAM_MODULE).href);
+import {mkdirSync,mkdtempSync} from 'node:fs';
+import assert from 'node:assert/strict';
+const root=mkdtempSync(join(tmpdir(),'dsh-memory-runtime-'));
+mkdirSync(root,{recursive:true});
+const tools=new Map(),effects=[];
+const ctx={tools:{register:t=>tools.set(t.name,t)},inject(){},on(){},get(){},effect(fn){const stop=fn();if(typeof stop==='function')effects.push(stop);}};
+apply(ctx,{dbDir:root,modelCacheDir:process.env.DSH_EMBEDDING_CACHE ?? join(root,'models'),ingest:'off',queryRewrite:false,reviewScheduling:false});
+const exec=(cwd,id)=>({agent:{id,session:{id,header:{cwd}}},signal:new AbortController().signal});
+const a=exec(root+'/A','a'),b=exec(root+'/B','b');
+try{
+ const saved=await tools.get('engram_save').execute({scope:'project',kind:'fact',content:'ISOLATION-CANARY-916',importance:0.8},a);
+ const ast=await tools.get('engram_stats').execute({scope:'project'},a);
+ const bst=await tools.get('engram_stats').execute({scope:'project'},b);
+ console.log(JSON.stringify({saved,a:ast,b:bst}));
+ assert(JSON.stringify(ast)!==JSON.stringify(bst),'project stores must differ');
+ const call=(name,args,e=a)=>tools.get(name).execute(args,e);
+ const before=await call('engram_search',{scope:'project',query:'ISOLATION-CANARY-916'});
+ assert(before.text.includes(saved.id));
+ const [aa,bb]=await Promise.all([call('engram_search',{scope:'project',query:'ISOLATION-CANARY-916'},a),call('engram_search',{scope:'project',query:'ISOLATION-CANARY-916'},b)]);
+ assert(aa.text.includes(saved.id));assert(!bb.text.includes(saved.id));
+ const updated=await call('engram_update',{scope:'project',id:saved.id,content:'ISOLATION-REVISED-917'});
+ const after=await call('engram_search',{scope:'project',query:'ISOLATION-CANARY-916'});
+ assert(!after.text.includes(saved.id));
+ await call('engram_forget',{scope:'project',id:updated.id,reason:'test cleanup',affects:'isolated fixture',stillUseful:'audit only'});
+ const forgotten=await call('engram_search',{scope:'project',query:'ISOLATION-REVISED-917'});
+ assert(!forgotten.text.includes(updated.id));
+ const preference=await call('engram_save',{scope:'user',kind:'preference',content:'GLOBAL-PREFERENCE-CANARY-918'});
+ const global=await call('engram_search',{scope:'user',query:'GLOBAL-PREFERENCE-CANARY-918'},b);
+ assert(global.text.includes(preference.id));
+ console.log('PASS: concurrent project isolation; update excludes old content; forgotten records excluded; explicit user preferences shared');
+}finally{for(const stop of effects)stop();}

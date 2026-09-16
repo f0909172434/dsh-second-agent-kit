@@ -1,0 +1,8 @@
+- id: sandbox
+  name: '@deepseek-ai/dsh-sandbox-local'
+  disabled: true
+- insert:
+    - id: second-agent-sandbox
+      name: dsh-second-agent-kit/sandbox
+    - id: second-agent-approval
+      name: dsh-second-agent-kit

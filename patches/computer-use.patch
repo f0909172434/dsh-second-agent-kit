@@ -1,0 +1,990 @@
+diff --git a/native/macos/Sources/Helper/KeyboardTargetPolicy.swift b/native/macos/Sources/Helper/KeyboardTargetPolicy.swift
+new file mode 100644
+index 0000000..c84a14e
+--- /dev/null
++++ b/native/macos/Sources/Helper/KeyboardTargetPolicy.swift
+@@ -0,0 +1,11 @@
++import Foundation
++
++// Pure policy, separately tested without Accessibility permissions or UI input.
++func permitsKeyboardTarget(hostPid: Int32, targetPid: Int32, hostIsActive: Bool,
++    belongsToObservedTree: Bool, bundleId: String?, executablePath: String?) -> Bool {
++    guard hostPid > 0, targetPid > 0, belongsToObservedTree else { return false }
++    if targetPid == hostPid { return true }
++    return hostIsActive
++        && bundleId == "com.apple.appkit.xpc.openAndSavePanelService"
++        && executablePath == "/System/Library/Frameworks/AppKit.framework/Versions/C/XPCServices/com.apple.appkit.xpc.openAndSavePanelService.xpc/Contents/MacOS/com.apple.appkit.xpc.openAndSavePanelService"
++}
+diff --git a/native/macos/Sources/Helper/main.swift b/native/macos/Sources/Helper/main.swift
+index e4e805c..7053d9e 100644
+--- a/native/macos/Sources/Helper/main.swift
++++ b/native/macos/Sources/Helper/main.swift
+@@ -6,7 +6,7 @@ import Darwin
+ import Foundation
+ import ScreenCaptureKit
+ 
+-private let helperVersion = "0.3.2"
++private let helperVersion = "0.3.2-local.20260916"
+ 
+ private struct HelperError: Error {
+     let code: String
+@@ -688,7 +688,7 @@ private func flags(_ modifiers: [String]) throws -> CGEventFlags {
+     return result
+ }
+ 
+-private func pressKey(_ key: String, modifiers: [String], app: NSRunningApplication) throws {
++private func pressKey(_ key: String, modifiers: [String], targetPid: pid_t) throws {
+     let normalized = key.lowercased()
+     guard let code = keyCodes[normalized] else {
+         throw fail("COMPUTER_PROVIDER_FAILURE", "unsupported key; use the documented key vocabulary")
+@@ -701,9 +701,9 @@ private func pressKey(_ key: String, modifiers: [String], app: NSRunningApplicat
+     let eventFlags = try flags(modifiers)
+     down.flags = eventFlags
+     up.flags = eventFlags
+-    down.postToPid(app.processIdentifier)
++    down.postToPid(targetPid)
+     usleep(5_000)
+-    up.postToPid(app.processIdentifier)
++    up.postToPid(targetPid)
+ }
+ 
+ private func focusedElement(_ app: NSRunningApplication) -> AXUIElement? {
+@@ -718,7 +718,7 @@ private func setSelectedText(_ text: String, app: NSRunningApplication) -> Bool
+     return AXUIElementSetAttributeValue(focused, kAXSelectedTextAttribute as CFString, text as CFTypeRef) == .success
+ }
+ 
+-private func typeTextWithKeyboard(_ text: String, app: NSRunningApplication) throws {
++private func typeTextWithKeyboard(_ text: String, targetPid: pid_t) throws {
+     let source = try targetedEventSource()
+     guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
+           let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) else {
+@@ -729,9 +729,65 @@ private func typeTextWithKeyboard(_ text: String, app: NSRunningApplication) thr
+         down.keyboardSetUnicodeString(stringLength: units.count, unicodeString: buffer.baseAddress!)
+         up.keyboardSetUnicodeString(stringLength: units.count, unicodeString: buffer.baseAddress!)
+     }
+-    down.postToPid(app.processIdentifier)
++    down.postToPid(targetPid)
+     usleep(5_000)
+-    up.postToPid(app.processIdentifier)
++    up.postToPid(targetPid)
++}
++
++// macOS hosts open/save panels in an AppKit XPC process. Never broadcast keys:
++// use only a focused element in the current, validated app-window snapshot.
++private func keyboardTargetPid(_ snapshot: ObservationSnapshot) throws -> pid_t {
++    let app = snapshot.app
++    // Remote AX proxies can report the host PID. Consult the system focus only
++    // when it names the exact same observed top-level window, never by PID alone.
++    if app.isActive,
++       let raw = axCopy(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute as CFString) as AnyObject?,
++       CFGetTypeID(raw) == AXUIElementGetTypeID(), let observedWindow = snapshot.window {
++        let systemFocus = raw as! AXUIElement
++        let top = axCopy(systemFocus, kAXTopLevelUIElementAttribute as CFString) as AnyObject?
++            ?? axCopy(systemFocus, kAXWindowAttribute as CFString) as AnyObject?
++        if let top, CFGetTypeID(top) == AXUIElementGetTypeID() {
++            let systemWindow = top as! AXUIElement
++            let sameWindow = CFEqual(systemWindow, observedWindow)
++                || (windowNumber(systemWindow) != nil && windowNumber(systemWindow) == windowNumber(observedWindow))
++            var pid: pid_t = 0
++            if sameWindow, AXUIElementGetPid(systemFocus, &pid) == .success,
++               pid != app.processIdentifier {
++                let target = NSRunningApplication(processIdentifier: pid)
++                guard permitsKeyboardTarget(hostPid: app.processIdentifier, targetPid: pid,
++                    hostIsActive: true, belongsToObservedTree: sameWindow,
++                    bundleId: target?.bundleIdentifier, executablePath: target?.executableURL?.resolvingSymlinksInPath().path),
++                    axString(systemFocus, kAXRoleAttribute as CFString) != "AXSecureTextField",
++                    axString(systemFocus, kAXSubroleAttribute as CFString) != "AXSecureTextField" else {
++                    throw fail("COMPUTER_ACTION_BLOCKED", "system focus is not an approved file-panel target")
++                }
++                return pid
++            }
++        }
++    }
++    var focused = snapshot.elements.filter { axBool($0.element, kAXFocusedAttribute as CFString) == true }.map(\.element)
++    if let appFocus = focusedElement(app), snapshot.elements.contains(where: { CFEqual($0.element, appFocus) }) {
++        focused.append(appFocus)
++    }
++    var targets: [(AXUIElement, pid_t)] = []
++    for element in focused {
++        var pid: pid_t = 0
++        if AXUIElementGetPid(element, &pid) == .success, pid > 0 { targets.append((element, pid)) }
++    }
++    // Prefer the focused remote view over a host proxy marked focused as well.
++    let candidate = targets.first(where: { $0.1 != app.processIdentifier }) ?? targets.first
++    guard let (element, pid) = candidate else { return app.processIdentifier }
++    guard axString(element, kAXRoleAttribute as CFString) != "AXSecureTextField",
++          axString(element, kAXSubroleAttribute as CFString) != "AXSecureTextField" else {
++        throw fail("COMPUTER_ACTION_BLOCKED", "keyboard input into a secure field is blocked")
++    }
++    let target = NSRunningApplication(processIdentifier: pid)
++    guard permitsKeyboardTarget(hostPid: app.processIdentifier, targetPid: pid,
++        hostIsActive: app.isActive, belongsToObservedTree: true,
++        bundleId: target?.bundleIdentifier, executablePath: target?.executableURL?.resolvingSymlinksInPath().path) else {
++        throw fail("COMPUTER_ACTION_BLOCKED", "focused keyboard target is not the approved app or its system file panel")
++    }
++    return pid
+ }
+ 
+ private func targetRecord(_ request: [String: Any], snapshot: ObservationSnapshot) throws -> ElementRecord? {
+@@ -959,7 +1015,7 @@ private func performAction(
+         if current.activation == "activated", setSelectedText(text, app: app) {
+             return actionResult(channel: "accessibility", activation: current.activation, pointerInput: false)
+         }
+-        try typeTextWithKeyboard(text, app: app)
++        try typeTextWithKeyboard(text, targetPid: keyboardTargetPid(current.snapshot))
+         return actionResult(channel: "keyboard", activation: current.activation, pointerInput: false)
+     case "press-key":
+         let current = try inputContext(
+@@ -974,7 +1030,7 @@ private func performAction(
+             timeoutMs: actionTimeoutMs,
+         )
+         let modifiers = action["modifiers"] as? [String] ?? []
+-        try pressKey(try string(action["key"], "action.key"), modifiers: modifiers, app: app)
++        try pressKey(try string(action["key"], "action.key"), modifiers: modifiers, targetPid: keyboardTargetPid(current.snapshot))
+         return actionResult(channel: "keyboard", activation: current.activation, pointerInput: false)
+     case "scroll":
+         try requirePointerInput(pointerInputPolicy)
+diff --git a/package.json b/package.json
+index 33b395b..2896e4d 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "@anionex/dsh-computer-use",
+-  "version": "0.3.2",
++  "version": "0.3.2-local.20260916",
+   "description": "Accessibility-first macOS Computer Use capability for DeepSeek Harness with stale-observation protection, app leases, confirmations, screenshots, and Web diagnostics",
+   "keywords": [
+     "deepseek",
+@@ -105,6 +105,7 @@
+     }
+   },
+   "peerDependencies": {
++    "@deepseek-ai/cordis": "^4.0.1",
+     "@deepseek-ai/dsh-agent": "^0.1.0-rc.6",
+     "@deepseek-ai/dsh-api-remotes": "^0.1.0-rc.6",
+     "@deepseek-ai/dsh-brand": "^0.1.0-rc.6",
+@@ -122,9 +123,9 @@
+     "@deepseek-ai/dsh-system-prompt": "^0.1.0-rc.6",
+     "@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
+     "@deepseek-ai/dsh-user-approval": "^0.1.0-rc.6",
+-    "@deepseek-ai/cordis": "^4.0.1",
+-    "react": "^18.2.0",
+-    "@deepseek-ai/schemastery": "^3.18.1"
++    "@deepseek-ai/dsh-util-values": "^0.1.5-rc.1",
++    "@deepseek-ai/schemastery": "^3.18.1",
++    "react": "^18.2.0"
+   },
+   "peerDependenciesMeta": {
+     "@deepseek-ai/dsh-host-webserver": {
+@@ -132,6 +133,30 @@
+     }
+   },
+   "devDependencies": {
++    "@deepseek-ai/cordis": "4.0.2",
++    "@deepseek-ai/dsh-agent": "0.1.5-rc.2",
++    "@deepseek-ai/dsh-api-remotes": "0.1.5-rc.2",
++    "@deepseek-ai/dsh-brand": "0.1.5-rc.2",
++    "@deepseek-ai/dsh-client-connection": "0.1.5-rc.2",
++    "@deepseek-ai/dsh-client-locale": "0.1.5-rc.2",
++    "@deepseek-ai/dsh-client-ui-primitives": "0.1.5-rc.2",
++    "@deepseek-ai/dsh-client-ui-renderer": "0.1.5-rc.2",
++    "@deepseek-ai/dsh-client-ui-settings": "0.1.5-rc.2",
++    "@deepseek-ai/dsh-client-ui-slots": "0.1.5-rc.2",
++    "@deepseek-ai/dsh-host-webserver": "0.1.5-rc.2",
++    "@deepseek-ai/dsh-llm": "0.1.5-rc.2",
++    "@deepseek-ai/dsh-scope": "0.1.5-rc.2",
++    "@deepseek-ai/dsh-session": "0.1.5-rc.2",
++    "@deepseek-ai/dsh-settings": "0.1.5-rc.2",
++    "@deepseek-ai/dsh-skill": "0.1.5-rc.2",
++    "@deepseek-ai/dsh-storage": "0.1.5-rc.2",
++    "@deepseek-ai/dsh-storage-domain": "0.1.5-rc.2",
++    "@deepseek-ai/dsh-subprocess": "0.1.5-rc.2",
++    "@deepseek-ai/dsh-system-prompt": "0.1.5-rc.2",
++    "@deepseek-ai/dsh-tools": "0.1.5-rc.2",
++    "@deepseek-ai/dsh-user-approval": "0.1.5-rc.2",
++    "@deepseek-ai/dsh-util-values": "0.1.5-rc.2",
++    "@deepseek-ai/schemastery": "3.18.2",
+     "@types/node": "^22.20.0",
+     "@types/react": "~18.3.1",
+     "@types/react-dom": "~18.3.0",
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index a9353fd..3096433 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -12,6 +12,78 @@ importers:
+         specifier: ^4.4.3
+         version: 4.4.3
+     devDependencies:
++      '@deepseek-ai/cordis':
++        specifier: 4.0.2
++        version: 4.0.2
++      '@deepseek-ai/dsh-agent':
++        specifier: 0.1.5-rc.2
++        version: 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-llm@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-session@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)))(@deepseek-ai/dsh-system-prompt@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-llm@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)))(@deepseek-ai/dsh-typert-protocol@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-util-values@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))
++      '@deepseek-ai/dsh-api-remotes':
++        specifier: 0.1.5-rc.2
++        version: 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))
++      '@deepseek-ai/dsh-brand':
++        specifier: 0.1.5-rc.2
++        version: 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-client-connection':
++        specifier: 0.1.5-rc.2
++        version: 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-client-locale':
++        specifier: 0.1.5-rc.2
++        version: 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-client-ui-primitives':
++        specifier: 0.1.5-rc.2
++        version: 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-client-ui-renderer':
++        specifier: 0.1.5-rc.2
++        version: 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-client-ui-settings':
++        specifier: 0.1.5-rc.2
++        version: 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-client-ui-slots':
++        specifier: 0.1.5-rc.2
++        version: 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-host-webserver':
++        specifier: 0.1.5-rc.2
++        version: 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-llm':
++        specifier: 0.1.5-rc.2
++        version: 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-scope':
++        specifier: 0.1.5-rc.2
++        version: 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-session':
++        specifier: 0.1.5-rc.2
++        version: 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))
++      '@deepseek-ai/dsh-settings':
++        specifier: 0.1.5-rc.2
++        version: 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-brand@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-session@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)))(@deepseek-ai/schemastery@3.18.2)
++      '@deepseek-ai/dsh-skill':
++        specifier: 0.1.5-rc.2
++        version: 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-llm@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))
++      '@deepseek-ai/dsh-storage':
++        specifier: 0.1.5-rc.2
++        version: 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-storage-domain':
++        specifier: 0.1.5-rc.2
++        version: 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-storage@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))
++      '@deepseek-ai/dsh-subprocess':
++        specifier: 0.1.5-rc.2
++        version: 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-system-prompt':
++        specifier: 0.1.5-rc.2
++        version: 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-llm@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))
++      '@deepseek-ai/dsh-tools':
++        specifier: 0.1.5-rc.2
++        version: 0.1.5-rc.2(c932a71f1eddbce465135b220c1509b0)
++      '@deepseek-ai/dsh-user-approval':
++        specifier: 0.1.5-rc.2
++        version: 0.1.5-rc.2(aa7ccdc1d76bd4dbf8974ae0642b899a)
++      '@deepseek-ai/dsh-util-values':
++        specifier: 0.1.5-rc.2
++        version: 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/schemastery':
++        specifier: 3.18.2
++        version: 3.18.2
+       '@types/node':
+         specifier: ^22.20.0
+         version: 22.20.1
+@@ -30,6 +102,198 @@ importers:
+ 
+ packages:
+ 
++  '@deepseek-ai/cordis@4.0.2':
++    resolution: {integrity: sha512-asOnXP1TzFSFQlHb1iegDZp0z/8WD1c7YNrwJR/Tx2bzNuMXfcekE/I67Iv6SQXeLB4csxqCngzQKANP7gdw0g==}
++    hasBin: true
++    peerDependencies:
++      '@deepseek-ai/cordis-plugin-include': ^1.0.7
++      '@deepseek-ai/cordis-plugin-loader': ^1.0.3
++    peerDependenciesMeta:
++      '@deepseek-ai/cordis-plugin-include':
++        optional: true
++      '@deepseek-ai/cordis-plugin-loader':
++        optional: true
++
++  '@deepseek-ai/cosmokit@1.8.3':
++    resolution: {integrity: sha512-qBo+ronVM6Eu2WNVJXi8JcMiqZ19T9BRIpV+5qJUFPXjGH/Z0QKcQMC/IZJ7L394YTOtJgcovbk9qP0w2GsBXQ==}
++
++  '@deepseek-ai/dsh-agent@0.1.5-rc.2':
++    resolution: {integrity: sha512-SlUL1riZmVLwMUR3jo9CP/R1cxov9dHkCJDh6JQW3fSZJVCIdPygBRlAweCUDvHxAEmPpFHxE/U3NmSUbX+vQQ==}
++    peerDependencies:
++      '@deepseek-ai/cordis': ^4.0.2
++      '@deepseek-ai/dsh-invariants': ^0.1.5-rc.2
++      '@deepseek-ai/dsh-llm': ^0.1.5-rc.2
++      '@deepseek-ai/dsh-scope': ^0.1.5-rc.2
++      '@deepseek-ai/dsh-session': ^0.1.5-rc.2
++      '@deepseek-ai/dsh-session-projection': ^0.1.5-rc.2
++      '@deepseek-ai/dsh-system-prompt': ^0.1.5-rc.2
++      '@deepseek-ai/dsh-typert-protocol': ^0.1.5-rc.2
++      '@deepseek-ai/dsh-util-values': ^0.1.5-rc.2
++
++  '@deepseek-ai/dsh-api-remotes@0.1.5-rc.2':
++    resolution: {integrity: sha512-O8t/aJiHatgzlQIgXx6xdmpy+iAXJ/Zab1xMHIx7Noo6mzSYUIxwfJkoYgPv9G0Yfx06FPoRTUtLiZ8IADqUOA==}
++    peerDependencies:
++      '@deepseek-ai/cordis': ^4.0.2
++      '@deepseek-ai/dsh-scope': ^0.1.5-rc.2
++
++  '@deepseek-ai/dsh-brand@0.1.5-rc.2':
++    resolution: {integrity: sha512-/+3TzQRYT4M8NINZ9OrsL5VWNyQSXof8mFLx3txiosWA7Bt0H6UcxUdKGXVwj6gCXhsQ74mzEHm2ucsflG0mYA==}
++    peerDependencies:
++      '@deepseek-ai/cordis': ^4.0.2
++
++  '@deepseek-ai/dsh-client-connection@0.1.5-rc.2':
++    resolution: {integrity: sha512-W0GAZX01hAfrfjoZbtwEJ5ik3dG20Hy/0TFYJ6dnvwxtcacGYNIwi3f2oHpZgLcEw+PWwq1Y9IV1iKG+yDOytg==}
++    peerDependencies:
++      '@deepseek-ai/cordis': ^4.0.2
++
++  '@deepseek-ai/dsh-client-locale@0.1.5-rc.2':
++    resolution: {integrity: sha512-kv56ki/WQWagsHt94wJAPzsiKnxa8KlmM33bZGgl2SgF4atlQ3iRCdkwJ3fQARXF4Ocnfutivoj5fu5usks1Sw==}
++    peerDependencies:
++      '@deepseek-ai/cordis': ^4.0.2
++
++  '@deepseek-ai/dsh-client-ui-primitives@0.1.5-rc.2':
++    resolution: {integrity: sha512-APWho69VlEmbLGqzBLiybTtjun93tEbxMMJlm+Q129Cx7ZGJak3DNfQtW3OPzBCf3Gzs2PGEz8fKbunTpea2jQ==}
++    peerDependencies:
++      '@deepseek-ai/cordis': ^4.0.2
++
++  '@deepseek-ai/dsh-client-ui-renderer@0.1.5-rc.2':
++    resolution: {integrity: sha512-otUJ72f1UfL8b/UL+tMdSE+FHqJWErPmHs2AWbad9nHXghNoZjL2bxumOhI3b+Hb1eezhhM+KanlWzIulTIkvw==}
++    peerDependencies:
++      '@deepseek-ai/cordis': ^4.0.2
++
++  '@deepseek-ai/dsh-client-ui-settings@0.1.5-rc.2':
++    resolution: {integrity: sha512-NsnZLRI2ZDzJJylx9KATuDwrTdJ0FSP93dU5SL5k2G2W4FLUspNvlAmk7bha5Miopfzmfd+h5/NvMdWe8PVVjQ==}
++    peerDependencies:
++      '@deepseek-ai/cordis': ^4.0.2
++
++  '@deepseek-ai/dsh-client-ui-slots@0.1.5-rc.2':
++    resolution: {integrity: sha512-uUKIHBcNzWmJFtTlPkgn7hprsE5uU8lJf8Fw7jKwUouZWIwGnLdxuunrm1LOZWr7G+b4UfjVwD4LV12rhF/WLg==}
++    peerDependencies:
++      '@deepseek-ai/cordis': ^4.0.2
++
++  '@deepseek-ai/dsh-credentials@0.1.5-rc.2':
++    resolution: {integrity: sha512-TfX5MYLlyw0BFERj3dGxVfP9QGcKZUE5eXDSaY7ZfJbfQgK51VfxV5tP899OxIDRD3Bw94K5Rzx+dbUTSWJBtA==}
++    peerDependencies:
++      '@deepseek-ai/cordis': ^4.0.2
++      '@deepseek-ai/dsh-invariants': ^0.1.5-rc.2
++
++  '@deepseek-ai/dsh-deque@0.1.5-rc.2':
++    resolution: {integrity: sha512-j1dINwK5XU8f+GPdzx22o2GvsAEhCvnLxqZfEqaLGYImbvdLkToVuU7M2nVcNSU+B7v+kl39lWf3E5u6tzG8RQ==}
++    peerDependencies:
++      '@deepseek-ai/cordis': ^4.0.2
++
++  '@deepseek-ai/dsh-host-webserver@0.1.5-rc.2':
++    resolution: {integrity: sha512-lFgGm9wDrHiTBANzsdoWzdfPSjWYuDFwCoNQ4Uko57Fo5XASL2unfRHGm1xZ828rwEYuGwRvJHMOuoP/17VmlA==}
++    peerDependencies:
++      '@deepseek-ai/cordis': ^4.0.2
++
++  '@deepseek-ai/dsh-llm@0.1.5-rc.2':
++    resolution: {integrity: sha512-Z7BVsBkK24SE4EItQeow8PHms/9GP0DSTi337vTAa/RY7tNg2Snz3INcXUj6CPZfvntQr1in9op9wLI+rfNsqA==}
++    peerDependencies:
++      '@deepseek-ai/cordis': ^4.0.2
++
++  '@deepseek-ai/dsh-scope@0.1.5-rc.2':
++    resolution: {integrity: sha512-JwItISje52iVIjlGMNayRVMZrvZU/0i3Gr0s+coND5nBp5lS+pOj9Zf1RQzA5cWjHYCWKmDuQc+m6zGlwmtAeQ==}
++    peerDependencies:
++      '@deepseek-ai/cordis': ^4.0.2
++      '@deepseek-ai/dsh-invariants': ^0.1.5-rc.2
++
++  '@deepseek-ai/dsh-session@0.1.5-rc.2':
++    resolution: {integrity: sha512-y+klWiGAWR4m4cc4ylurA0cW63673B4N8cr2ANMimweDZAfxL4XVBC7WiD/5DT2DtIhYmVZhz/niyS/WbniUTA==}
++    peerDependencies:
++      '@deepseek-ai/cordis': ^4.0.2
++      '@deepseek-ai/dsh-scope': ^0.1.5-rc.2
++
++  '@deepseek-ai/dsh-settings@0.1.5-rc.2':
++    resolution: {integrity: sha512-LI2Y6GkEs9ALMW+7S9jHPeEZDXHtG5X6cix1HdJ1rRxTEO5427QlYhMiz45rk7hqZ8ca2O4XFMW8IWXFZQLxmw==}
++    peerDependencies:
++      '@deepseek-ai/cordis': ^4.0.2
++      '@deepseek-ai/dsh-brand': ^0.1.5-rc.2
++      '@deepseek-ai/dsh-invariants': ^0.1.5-rc.2
++      '@deepseek-ai/dsh-session': ^0.1.5-rc.2
++      '@deepseek-ai/schemastery': ^3.18.2
++
++  '@deepseek-ai/dsh-skill@0.1.5-rc.2':
++    resolution: {integrity: sha512-Z1mouW3vTzmYk9OAGUp7S9oOB4k9+qr8BpD7KPAR0nAPX1XOxyKA7zQA/6P0tMS69/aS7UsyLZNz9+RG8ZZ8Wg==}
++    peerDependencies:
++      '@deepseek-ai/cordis': ^4.0.2
++      '@deepseek-ai/dsh-llm': ^0.1.5-rc.2
++      '@deepseek-ai/dsh-scope': ^0.1.5-rc.2
++
++  '@deepseek-ai/dsh-storage-domain@0.1.5-rc.2':
++    resolution: {integrity: sha512-NZ9U14kqcCnF4F+ynrTlBLb+S9FEOwSLkfdjDgdfrFdHh4c2WsRKWxyeYbL8AME1rB+XxLp4YQBx8LQ0Kiy62A==}
++    peerDependencies:
++      '@deepseek-ai/cordis': ^4.0.2
++      '@deepseek-ai/dsh-invariants': ^0.1.5-rc.2
++      '@deepseek-ai/dsh-storage': ^0.1.5-rc.2
++
++  '@deepseek-ai/dsh-storage@0.1.5-rc.2':
++    resolution: {integrity: sha512-mYt6+JSRxA5fSUcYnI3JFvYw9/TKUyykz5JWoZZ3MxWudItfhw+CV6T3kn3/bpTbWIQnGesSeY+0pJJVz0xBAA==}
++    peerDependencies:
++      '@deepseek-ai/cordis': ^4.0.2
++
++  '@deepseek-ai/dsh-subprocess@0.1.5-rc.2':
++    resolution: {integrity: sha512-Bbxg5/dlbK09qNu4/BVuicUAYnC+b/YGhtkUBsxa9/+KRfvloeJcJ9Ug6dKAeJeluzEXnFIh08+MNweO7hn7ig==}
++    peerDependencies:
++      '@deepseek-ai/cordis': ^4.0.2
++      '@deepseek-ai/dsh-http-proxy': ^0.1.5-rc.2
++
++  '@deepseek-ai/dsh-system-prompt@0.1.5-rc.2':
++    resolution: {integrity: sha512-VtmZVKqBMJ7kzskHu0jY+Jth7jSuKMG8QB3MBPzJe9M0LL4YPMWsGKt9gGky9RXolk/ugAy4YZEv1gUqouVofA==}
++    peerDependencies:
++      '@deepseek-ai/cordis': ^4.0.2
++      '@deepseek-ai/dsh-invariants': ^0.1.5-rc.2
++      '@deepseek-ai/dsh-llm': ^0.1.5-rc.2
++      '@deepseek-ai/dsh-scope': ^0.1.5-rc.2
++
++  '@deepseek-ai/dsh-timeout@0.1.5-rc.2':
++    resolution: {integrity: sha512-FgfaAw8Zt5X4Y6Ljh833B8Hy7h96FeR+yjNKI3iSyZSqREqOBgvDGXFfQlSu6V3Buvw/cbI/CJUQJvfRBKXOiA==}
++    peerDependencies:
++      '@deepseek-ai/cordis': ^4.0.2
++
++  '@deepseek-ai/dsh-tools@0.1.5-rc.2':
++    resolution: {integrity: sha512-k2yZuJJtszaU9lzr2aBtdeFMINrkdlk4ellbtrMokA2oySVqJmAM8dv+u9RtzduD3aRRqyr2i2hWrTACz0qOrA==}
++    peerDependencies:
++      '@deepseek-ai/cordis': ^4.0.2
++      '@deepseek-ai/dsh-agent': ^0.1.5-rc.2
++      '@deepseek-ai/dsh-code-runtime': ^0.1.5-rc.2
++      '@deepseek-ai/dsh-invariants': ^0.1.5-rc.2
++      '@deepseek-ai/dsh-llm': ^0.1.5-rc.2
++      '@deepseek-ai/dsh-scope': ^0.1.5-rc.2
++      '@deepseek-ai/dsh-session': ^0.1.5-rc.2
++      '@deepseek-ai/dsh-system-prompt': ^0.1.5-rc.2
++      '@deepseek-ai/dsh-user-approval': ^0.1.5-rc.2
++
++  '@deepseek-ai/dsh-typert-protocol@0.1.5-rc.2':
++    resolution: {integrity: sha512-zP8J20rBXa1AFjKL2i83JBeQcePZx8yal3pNojj4t7CCokMcoFMUbr50woa6fY1tRJ7qHxgypO3rH8Q6YWgmiA==}
++    peerDependencies:
++      '@deepseek-ai/cordis': ^4.0.2
++
++  '@deepseek-ai/dsh-user-approval@0.1.5-rc.2':
++    resolution: {integrity: sha512-8UpMEnEyMo6mYEVELBo0DC2iG7aJJfFMTNkU+DKD3c5Ut7ySRDzt1iRr1qni/CzqlTIpQBAkGaG77qk4q/v1bg==}
++    peerDependencies:
++      '@deepseek-ai/cordis': ^4.0.2
++      '@deepseek-ai/dsh-agent': ^0.1.5-rc.2
++      '@deepseek-ai/dsh-brand': ^0.1.5-rc.2
++      '@deepseek-ai/dsh-invariants': ^0.1.5-rc.2
++      '@deepseek-ai/dsh-llm': ^0.1.5-rc.2
++      '@deepseek-ai/dsh-scope': ^0.1.5-rc.2
++      '@deepseek-ai/dsh-session': ^0.1.5-rc.2
++      '@deepseek-ai/dsh-system-prompt': ^0.1.5-rc.2
++
++  '@deepseek-ai/dsh-util-crypto@0.1.5-rc.2':
++    resolution: {integrity: sha512-JR0aJEUL35RE8FVT89wMZMbPwMrbkjNcy+gE9pq70d/m2Zxw3a0iNer+BAxPAKYPbmy0xDDXReTwXiecKVy4sQ==}
++    peerDependencies:
++      '@deepseek-ai/cordis': ^4.0.2
++
++  '@deepseek-ai/dsh-util-values@0.1.5-rc.2':
++    resolution: {integrity: sha512-Cr0TkM6dFAD+Iy4sNXH/afJVMHwJXoOztivj+RflkYoACsOq+Ix0vdHn36hwW7mayU8OK3ZKIZUQ6BPo1fHvUg==}
++    peerDependencies:
++      '@deepseek-ai/cordis': ^4.0.2
++
++  '@deepseek-ai/schemastery@3.18.2':
++    resolution: {integrity: sha512-njDtZsznjYxok7KLLlHOPyuv2efdWVbSflAHgztSfbMsg+CVraEoRe2DjOCgClYv3ZCSm7WXoaUkbB/+RY7tWQ==}
++
+   '@jridgewell/sourcemap-codec@1.5.5':
+     resolution: {integrity: sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og==}
+ 
+@@ -186,16 +450,44 @@ packages:
+     resolution: {integrity: sha512-Izi8RQcffqCeNVgFigKli1ssklIbpHnCYc6AknXGYoB6grJqyeby7jv12JUQgmTAnIDnbck1uxksT4dzN3PWBA==}
+     engines: {node: '>=12'}
+ 
++  bytes@3.1.2:
++    resolution: {integrity: sha512-/Nf7TyzTx6S3yRJObOAV7956r8cr2+Oj8AC5dt8wSP3BQAoeX58NoHyCU8P8zGkNXStjTSi6fzO6F0pBdcYbEg==}
++    engines: {node: '>= 0.8'}
++
+   chai@6.2.2:
+     resolution: {integrity: sha512-NUPRluOfOiTKBKvWPtSD4PhFvWCqOi0BGStNWs57X9js7XGTprSmFoz5F0tWhR4WPjNeR9jXqdC7/UpSJTnlRg==}
+     engines: {node: '>=18'}
+ 
++  compressible@2.0.18:
++    resolution: {integrity: sha512-AF3r7P5dWxL8MxyITRMlORQNaOA2IkAFaTr4k7BUumjPtRpGDTZpl0Pb1XCO6JeDCBdp126Cgs9sMxqSjgYyRg==}
++    engines: {node: '>= 0.6'}
++
++  compression@1.8.2:
++    resolution: {integrity: sha512-o8vI5RE5A6EVVOd9o41jKp41aJom+QTEO/Bx8MYNjexMo/Bv2WOjUfZr+aL0WnYSgymUy6zeguqLTsIhV0gMvQ==}
++    engines: {node: '>= 0.8.0'}
++
++  content-type@2.1.0:
++    resolution: {integrity: sha512-mj7UPXE0jaqaOsukNZRUEfEi2AcL7C/vwmwcHV0O97eO1E1pxBZuyjlZrx5seTaNBg1U6+o35wpa35Qfcc+7ag==}
++    engines: {node: '>=18'}
++
+   convert-source-map@2.0.0:
+     resolution: {integrity: sha512-Kvp459HrV2FEJ1CAsi1Ku+MY3kasH19TFykTz2xWmMeq6bk2NU3XXvfJ+Q61m0xktWwt+1HSYf3JZsTms3aRJg==}
+ 
+   csstype@3.2.3:
+     resolution: {integrity: sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ==}
+ 
++  debug@2.6.9:
++    resolution: {integrity: sha512-bC7ElrdJaJnPbAP+1EotYvqZsb3ecl5wi6Bfi6BJTUcNowp6cvspg0jXznRTKDjm/E7AdgFBVeAPVMNcKGsHMA==}
++    peerDependencies:
++      supports-color: '*'
++    peerDependenciesMeta:
++      supports-color:
++        optional: true
++
++  destroy@1.2.0:
++    resolution: {integrity: sha512-2sJGJTaXIIaR1w4iJSNoN0hnMY7Gpc/n8D4qSCJw8QqFWXf7cuAgnEHxBpweaVcPevC2l3KpjYCx3NypQQgaJg==}
++    engines: {node: '>= 0.8', npm: 1.2.8000 || >= 1.4.16}
++
+   detect-libc@2.1.2:
+     resolution: {integrity: sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==}
+     engines: {node: '>=8'}
+@@ -301,15 +593,34 @@ packages:
+   magic-string@0.30.21:
+     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
+ 
++  mime-db@1.54.0:
++    resolution: {integrity: sha512-aU5EJuIN2WDemCcAp2vFBfp/m4EAhWJnUNSSw0ixs7/kXbd6Pg64EmwJkNdFhB8aWt1sH2CTXrLxo/iAGV3oPQ==}
++    engines: {node: '>= 0.6'}
++
++  ms@2.0.0:
++    resolution: {integrity: sha512-Tpp60P6IUJDTuOq/5Z8cdskzJujfwqfOTkrwIwj7IRISpnkJnT6SyJ4PCPnGMoFjC9ddhal5KVIYtAt97ix05A==}
++
+   nanoid@3.3.18:
+     resolution: {integrity: sha512-DTg4MJbGMWkfi6VZFdNt2/caMbQy4Ou+Op/hJQvGEWcnVfoA1QA+xzRKAzw9jD6+GVOOeYr/mIcuDSdug6F6+w==}
+     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
+     hasBin: true
+ 
++  negotiator@0.6.4:
++    resolution: {integrity: sha512-myRT3DiWPHqho5PrJaIRyaMv2kgYf0mUVgBNOYMuCH5Ki1yEiQaf/ZJuQ62nvpc44wL5WDbTX7yGJi1Neevw8w==}
++    engines: {node: '>= 0.6'}
++
++  negotiator@1.1.0:
++    resolution: {integrity: sha512-NMPBRMJgiQHjbd8phG3Vebdx4kZ1H121rbl5IkMqeOsahptB9BKo/d7oJ3zTXqTgagn2bWlNSXkh0QUGM31RYg==}
++    engines: {node: '>=18'}
++
+   obug@2.1.4:
+     resolution: {integrity: sha512-4a+OsYv9UktOJKE+l1A4OufDgdRF9PifWj+tJnHURo/P+WOxpG4GzUFL9qCalmWauao6ogiG+QvnCovwPoyAWA==}
+     engines: {node: '>=12.20.0'}
+ 
++  on-headers@1.1.0:
++    resolution: {integrity: sha512-737ZY3yNnXy37FHkQxPzt4UZ2UWPWiCZWLvFZ4fu5cueciegX0zGPnrlY6bwRg4FdQOe9YU8MkmJwGhoMybl8A==}
++    engines: {node: '>= 0.8'}
++
+   pathe@2.0.3:
+     resolution: {integrity: sha512-WUjGcAqP1gQacoQe+OBJsFA7Ld4DyXuUIjZ5cc75cLHvJ7dtNsTugphxIADwspS+AraAUePCKrSVtPLFj/F88w==}
+ 
+@@ -329,6 +640,9 @@ packages:
+     engines: {node: ^20.19.0 || >=22.12.0}
+     hasBin: true
+ 
++  safe-buffer@5.2.1:
++    resolution: {integrity: sha512-rp3So07KcdmmKbGvgaNxQSJr7bGVSVk5S9Eq1F+ppbRo70+YeaDxkw5Dd8NPN+GD6bjnYm2VuPuCXmpuYvmCXQ==}
++
+   siginfo@2.0.0:
+     resolution: {integrity: sha512-ybx0WO1/8bSBLEWXZvEd7gMW3Sn3JFlW3TvX1nREbDLRNQNaeNN8WK0meBwPdAaOI7TtRRRJn/Es1zhrrCHu7g==}
+ 
+@@ -365,6 +679,10 @@ packages:
+   undici-types@6.21.0:
+     resolution: {integrity: sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==}
+ 
++  vary@1.1.2:
++    resolution: {integrity: sha512-BNGbWLfd0eUPabhkXUVm0j8uuvREyTh5ovRa/dyow/BqAbZJyC+5fU+IzQOzmAKzYqYRAISoRhdQr3eIZ/PXqg==}
++    engines: {node: '>= 0.8'}
++
+   vite@8.2.1:
+     resolution: {integrity: sha512-EU/eS7BH3XROHh2YnBefjM6DBKA6ZeMZEYQbj7NLWg5wHYlhB8B/Mayd5XsgWq+NFYccDOTemRpdETWR6Ka/lw==}
+     engines: {node: ^20.19.0 || >=22.12.0}
+@@ -458,6 +776,189 @@ packages:
+ 
+ snapshots:
+ 
++  '@deepseek-ai/cordis@4.0.2':
++    dependencies:
++      '@deepseek-ai/cosmokit': 1.8.3
++      '@standard-schema/spec': 1.1.0
++
++  '@deepseek-ai/cosmokit@1.8.3': {}
++
++  '@deepseek-ai/dsh-agent@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-llm@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-session@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)))(@deepseek-ai/dsh-system-prompt@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-llm@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)))(@deepseek-ai/dsh-typert-protocol@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-util-values@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))':
++    dependencies:
++      '@deepseek-ai/cordis': 4.0.2
++      '@deepseek-ai/dsh-llm': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-scope': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-session': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))
++      '@deepseek-ai/dsh-system-prompt': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-llm@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))
++      '@deepseek-ai/dsh-typert-protocol': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-util-values': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++
++  '@deepseek-ai/dsh-api-remotes@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))':
++    dependencies:
++      '@deepseek-ai/cordis': 4.0.2
++      '@deepseek-ai/dsh-deque': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-scope': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-session': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))
++      '@deepseek-ai/dsh-util-values': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++
++  '@deepseek-ai/dsh-brand@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)':
++    dependencies:
++      '@deepseek-ai/cordis': 4.0.2
++
++  '@deepseek-ai/dsh-client-connection@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)':
++    dependencies:
++      '@deepseek-ai/cordis': 4.0.2
++      '@deepseek-ai/dsh-credentials': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/schemastery': 3.18.2
++      zod: 4.4.3
++    transitivePeerDependencies:
++      - '@deepseek-ai/dsh-invariants'
++
++  '@deepseek-ai/dsh-client-locale@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)':
++    dependencies:
++      '@deepseek-ai/cordis': 4.0.2
++      '@deepseek-ai/schemastery': 3.18.2
++
++  '@deepseek-ai/dsh-client-ui-primitives@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)':
++    dependencies:
++      '@deepseek-ai/cordis': 4.0.2
++
++  '@deepseek-ai/dsh-client-ui-renderer@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)':
++    dependencies:
++      '@deepseek-ai/cordis': 4.0.2
++
++  '@deepseek-ai/dsh-client-ui-settings@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)':
++    dependencies:
++      '@deepseek-ai/cordis': 4.0.2
++
++  '@deepseek-ai/dsh-client-ui-slots@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)':
++    dependencies:
++      '@deepseek-ai/cordis': 4.0.2
++
++  '@deepseek-ai/dsh-credentials@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)':
++    dependencies:
++      '@deepseek-ai/cordis': 4.0.2
++      '@deepseek-ai/dsh-brand': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++
++  '@deepseek-ai/dsh-deque@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)':
++    dependencies:
++      '@deepseek-ai/cordis': 4.0.2
++
++  '@deepseek-ai/dsh-host-webserver@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)':
++    dependencies:
++      '@deepseek-ai/cordis': 4.0.2
++      '@deepseek-ai/schemastery': 3.18.2
++      compression: 1.8.2
++      negotiator: 1.1.0
++    transitivePeerDependencies:
++      - supports-color
++
++  '@deepseek-ai/dsh-llm@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)':
++    dependencies:
++      '@deepseek-ai/cordis': 4.0.2
++      '@deepseek-ai/dsh-brand': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-timeout': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-typert-protocol': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-util-crypto': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-util-values': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/schemastery': 3.18.2
++      zod: 4.4.3
++
++  '@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)':
++    dependencies:
++      '@deepseek-ai/cordis': 4.0.2
++
++  '@deepseek-ai/dsh-session@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))':
++    dependencies:
++      '@deepseek-ai/cordis': 4.0.2
++      '@deepseek-ai/dsh-brand': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-llm': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-scope': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-util-values': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++
++  '@deepseek-ai/dsh-settings@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-brand@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-session@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)))(@deepseek-ai/schemastery@3.18.2)':
++    dependencies:
++      '@deepseek-ai/cordis': 4.0.2
++      '@deepseek-ai/dsh-brand': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-session': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))
++      '@deepseek-ai/dsh-util-values': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/schemastery': 3.18.2
++
++  '@deepseek-ai/dsh-skill@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-llm@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))':
++    dependencies:
++      '@deepseek-ai/cordis': 4.0.2
++      '@deepseek-ai/dsh-llm': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-scope': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-util-values': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/schemastery': 3.18.2
++
++  '@deepseek-ai/dsh-storage-domain@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-storage@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))':
++    dependencies:
++      '@deepseek-ai/cordis': 4.0.2
++      '@deepseek-ai/dsh-storage': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/schemastery': 3.18.2
++      zod: 4.4.3
++
++  '@deepseek-ai/dsh-storage@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)':
++    dependencies:
++      '@deepseek-ai/cordis': 4.0.2
++
++  '@deepseek-ai/dsh-subprocess@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)':
++    dependencies:
++      '@deepseek-ai/cordis': 4.0.2
++
++  '@deepseek-ai/dsh-system-prompt@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-llm@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))':
++    dependencies:
++      '@deepseek-ai/cordis': 4.0.2
++      '@deepseek-ai/dsh-llm': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-scope': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/schemastery': 3.18.2
++
++  '@deepseek-ai/dsh-timeout@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)':
++    dependencies:
++      '@deepseek-ai/cordis': 4.0.2
++
++  '@deepseek-ai/dsh-tools@0.1.5-rc.2(c932a71f1eddbce465135b220c1509b0)':
++    dependencies:
++      '@deepseek-ai/cordis': 4.0.2
++      '@deepseek-ai/dsh-agent': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-llm@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-session@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)))(@deepseek-ai/dsh-system-prompt@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-llm@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)))(@deepseek-ai/dsh-typert-protocol@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-util-values@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))
++      '@deepseek-ai/dsh-brand': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-llm': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-scope': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-session': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))
++      '@deepseek-ai/dsh-system-prompt': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-llm@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))
++      '@deepseek-ai/dsh-user-approval': 0.1.5-rc.2(aa7ccdc1d76bd4dbf8974ae0642b899a)
++      '@deepseek-ai/dsh-util-values': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/schemastery': 3.18.2
++
++  '@deepseek-ai/dsh-typert-protocol@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)':
++    dependencies:
++      '@deepseek-ai/cordis': 4.0.2
++
++  '@deepseek-ai/dsh-user-approval@0.1.5-rc.2(aa7ccdc1d76bd4dbf8974ae0642b899a)':
++    dependencies:
++      '@deepseek-ai/cordis': 4.0.2
++      '@deepseek-ai/dsh-agent': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-llm@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-session@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)))(@deepseek-ai/dsh-system-prompt@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-llm@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)))(@deepseek-ai/dsh-typert-protocol@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-util-values@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))
++      '@deepseek-ai/dsh-brand': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-llm': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-scope': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-session': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))
++      '@deepseek-ai/dsh-system-prompt': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-llm@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))
++      '@deepseek-ai/schemastery': 3.18.2
++
++  '@deepseek-ai/dsh-util-crypto@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)':
++    dependencies:
++      '@deepseek-ai/cordis': 4.0.2
++
++  '@deepseek-ai/dsh-util-values@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)':
++    dependencies:
++      '@deepseek-ai/cordis': 4.0.2
++
++  '@deepseek-ai/schemastery@3.18.2':
++    dependencies:
++      '@deepseek-ai/cosmokit': 1.8.3
++      '@standard-schema/spec': 1.1.0
++
+   '@jridgewell/sourcemap-codec@1.5.5': {}
+ 
+   '@oxc-project/types@0.143.0': {}
+@@ -575,12 +1076,39 @@ snapshots:
+ 
+   assertion-error@2.0.1: {}
+ 
++  bytes@3.1.2: {}
++
+   chai@6.2.2: {}
+ 
++  compressible@2.0.18:
++    dependencies:
++      mime-db: 1.54.0
++
++  compression@1.8.2:
++    dependencies:
++      bytes: 3.1.2
++      compressible: 2.0.18
++      debug: 2.6.9
++      destroy: 1.2.0
++      negotiator: 0.6.4
++      on-headers: 1.1.0
++      safe-buffer: 5.2.1
++      vary: 1.1.2
++    transitivePeerDependencies:
++      - supports-color
++
++  content-type@2.1.0: {}
++
+   convert-source-map@2.0.0: {}
+ 
+   csstype@3.2.3: {}
+ 
++  debug@2.6.9:
++    dependencies:
++      ms: 2.0.0
++
++  destroy@1.2.0: {}
++
+   detect-libc@2.1.2: {}
+ 
+   es-module-lexer@2.3.1: {}
+@@ -651,10 +1179,22 @@ snapshots:
+     dependencies:
+       '@jridgewell/sourcemap-codec': 1.5.5
+ 
++  mime-db@1.54.0: {}
++
++  ms@2.0.0: {}
++
+   nanoid@3.3.18: {}
+ 
++  negotiator@0.6.4: {}
++
++  negotiator@1.1.0:
++    dependencies:
++      content-type: 2.1.0
++
+   obug@2.1.4: {}
+ 
++  on-headers@1.1.0: {}
++
+   pathe@2.0.3: {}
+ 
+   picocolors@1.1.1: {}
+@@ -687,6 +1227,8 @@ snapshots:
+       '@rolldown/binding-win32-arm64-msvc': 1.2.3
+       '@rolldown/binding-win32-x64-msvc': 1.2.3
+ 
++  safe-buffer@5.2.1: {}
++
+   siginfo@2.0.0: {}
+ 
+   source-map-js@1.2.1: {}
+@@ -710,6 +1252,8 @@ snapshots:
+ 
+   undici-types@6.21.0: {}
+ 
++  vary@1.1.2: {}
++
+   vite@8.2.1(@types/node@22.20.1):
+     dependencies:
+       lightningcss: 1.33.0
+diff --git a/src/client/index.tsx b/src/client/index.tsx
+index 62a4ae9..a10ca5d 100644
+--- a/src/client/index.tsx
++++ b/src/client/index.tsx
+@@ -1,8 +1,10 @@
++import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
++import type {} from '@deepseek-ai/dsh-client-connection/client'
+ /** DSH Computer Use browser plugin: provider health, permissions, limits, and app policy. */
+ 
+ import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
+ import { Button, Input } from '@deepseek-ai/dsh-client-ui-primitives'
+-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
++import type { Context as ClientContext } from '@deepseek-ai/cordis'
+ import type {} from '@deepseek-ai/dsh-api-remotes/client'
+ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+ import type {} from '@deepseek-ai/dsh-client-locale/client'
+@@ -561,7 +563,7 @@ export function apply(ctx: ClientContext): void {
+   const controller = new ComputerUseSettingsController()
+   ctx.effect(() => {
+     const disposers = [
+-      ctx.remote.$on('settings/document-updated', ns => { if (ns === NS) controller.refreshIfLoaded() }),
++      ctx.remote.$on('settings/document-updated', (ns: string) => { if (ns === NS) controller.refreshIfLoaded() }),
+       ctx.on('connection/reset', () => { controller.refreshIfLoaded() }),
+     ]
+     return () => { for (const dispose of disposers) dispose() }
+diff --git a/src/confirmations.ts b/src/confirmations.ts
+index f69092f..e2f10cb 100644
+--- a/src/confirmations.ts
++++ b/src/confirmations.ts
+@@ -48,7 +48,7 @@ export class ComputerConfirmationManager {
+     agent: Agent,
+     app: ComputerAppIdentity,
+     request: ComputerConfirmRequest,
+-    callId: import('@deepseek-ai/dsh-llm').CallId | undefined,
++    callId: import('@deepseek-ai/dsh-llm').ToolCallId | undefined,
+     signal: AbortSignal,
+   ): Promise<ComputerConfirmation> {
+     if (approvalPolicy(this.ctx, agent) === 'never') {
+diff --git a/src/exposure.ts b/src/exposure.ts
+index b56cf98..6917d93 100644
+--- a/src/exposure.ts
++++ b/src/exposure.ts
+@@ -96,7 +96,7 @@ export function hasLoadedComputerUseSkill(session: Session): boolean {
+   const nativeCalls = new Set<string>()
+   const events = typeof (session as any).snapshotEvents === 'function'
+     ? (session as any).snapshotEvents()
+-    : session.events ?? []
++    : (session as unknown as { events?: readonly unknown[] }).events ?? []
+   for (const event of events) {
+     if (event.type === 'user/message') {
+       const source = event.data.source
+diff --git a/src/leases.ts b/src/leases.ts
+index a9aeb6b..ed28b7f 100644
+--- a/src/leases.ts
++++ b/src/leases.ts
+@@ -2,7 +2,7 @@
+ 
+ import { z } from 'zod'
+ import type { Agent } from '@deepseek-ai/dsh-agent'
+-import type { CallId } from '@deepseek-ai/dsh-llm'
++import type { ToolCallId as CallId } from '@deepseek-ai/dsh-llm'
+ import type { SessionEvent, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
+ import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
+ import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
+@@ -187,7 +187,7 @@ export class ComputerLeaseManager {
+     await this.prepareStorage()
+     const sessionEvents = typeof (agent.session as any).snapshotEvents === 'function'
+       ? (agent.session as any).snapshotEvents()
+-      : agent.session.events ?? []
++      : (agent.session as unknown as { events?: SessionEvent[] }).events ?? []
+     const turn = currentTurn(sessionEvents)
+     if (turn === undefined) {
+       throw new ComputerUseError('COMPUTER_PERMISSION_REQUIRED', `${scope} access for ${app.name} must be requested inside an open Agent turn`)
+diff --git a/src/tools.ts b/src/tools.ts
+index 4ffabb5..80eaa2c 100644
+--- a/src/tools.ts
++++ b/src/tools.ts
+@@ -1,7 +1,8 @@
++import type { JsonValue } from '@deepseek-ai/dsh-util-values'
+ /** Focused model-facing Computer Use Tool definitions. */
+ 
+ import { createUserMessage, type ContentBlock } from '@deepseek-ai/dsh-llm'
+-import { defineTool, type JsonValue, type ToolDefinition, type ToolRunContext, type ValueSchemaSpec } from '@deepseek-ai/dsh-tools'
++import { defineTool, type ToolDefinition, type ToolRunContext, type ValueSchemaSpec } from '@deepseek-ai/dsh-tools'
+ import {
+   ComputerConfirmationToken,
+   ComputerObservationId,
+diff --git a/src/types.ts b/src/types.ts
+index d00e98c..087f46a 100644
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -2,7 +2,7 @@
+ 
+ import type { Agent } from '@deepseek-ai/dsh-agent'
+ import type { Branded } from '@deepseek-ai/dsh-brand'
+-import type { CallId } from '@deepseek-ai/dsh-llm'
++import type { ToolCallId as CallId } from '@deepseek-ai/dsh-llm'
+ 
+ /** Opaque identifier for one immutable observed UI state. */
+ export type ComputerObservationId = Branded<'ComputerObservationId'>
+diff --git a/tests/keyboard-target-policy.swift b/tests/keyboard-target-policy.swift
+new file mode 100644
+index 0000000..68e637e
+--- /dev/null
++++ b/tests/keyboard-target-policy.swift
+@@ -0,0 +1,20 @@
++import Foundation
++@main struct PolicyTests {
++ static func main() {
++ let b = "com.apple.appkit.xpc.openAndSavePanelService"
++ let p = "/System/Library/Frameworks/AppKit.framework/Versions/C/XPCServices/com.apple.appkit.xpc.openAndSavePanelService.xpc/Contents/MacOS/com.apple.appkit.xpc.openAndSavePanelService"
++ func check(_ host: Int32 = 1, _ target: Int32 = 2, _ active: Bool = true, _ observed: Bool = true, _ bundle: String? = nil, _ path: String? = nil) -> Bool {
++ permitsKeyboardTarget(hostPid: host, targetPid: target, hostIsActive: active, belongsToObservedTree: observed, bundleId: bundle, executablePath: path)
++ }
++ precondition(check(1,1))
++ precondition(check(1,2,true,true,b,p))
++ precondition(!check(1,2,false,true,b,p))
++ precondition(!check(1,2,true,false,b,p))
++ precondition(!check(1,2,true,true,"untrusted",p))
++ precondition(!check(1,2,true,true,b,"/tmp/" + b))
++ precondition(!check(0,2,true,true,b,p))
++ precondition(!check(1,0,true,true,b,p))
++ precondition(!check(1,2,true,true,nil,nil))
++ print("keyboard target policy: 9 checks passed")
++ }
++}
