@@ -69,3 +69,5 @@ This is **not a universal semantic firewall**. Regex command recognition is advi
 No user credentials, conversation logs, personal documents, or production memory databases belong in this repository. See `VALIDATION.md` for current observed results and unresolved cases.
 
 Desktop 0.15.6 incorrectly treats local tarballs as missing directories and removes them at boot. Keep the extracted directory at a stable path. The per-turn Mac input guard blocks further dispatch after two consecutive recognized failures or 20 inputs; observations do not reset it. It does not impose a token-spending cap.
+
+[Case study: verified upstream adoption and migration limits](docs/ENGRAM-CASE-STUDY.md)

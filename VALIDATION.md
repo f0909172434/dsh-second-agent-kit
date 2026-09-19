@@ -37,3 +37,12 @@ No credentials, live session logs, production databases or user documents are in
 - Old 0.7.5 patch retained as historical evidence. Verified offline operations now use stock 0.7.6; equivalence of automatic-ingestion policies is not claimed.
 - The existing js-yaml 4.1.1 direct development dependency was updated to 4.3.2 after a concrete audit finding; the resulting dependency audit reports zero vulnerabilities.
 - At the time of this local acceptance, GitHub CI had not run remotely. Remote verification is tracked in the kit pull request. Engram upstream files remain a local contribution proposal, not a submitted or accepted change.
+
+
+## 2026-09-20 — actual host composition and upstream submission
+
+- Five additional cases pass locally through the real Cordis Context, Loader/Include, DSH tool execution pipeline and loopback HTTP server, using the published Engram package and disposable configuration/databases.
+- The host suite uses synthetic workspace/session inputs and an LLM service that rejects all calls; model-call count remains zero. The lifecycle context and tool pipeline are no longer doubles in this separate tier. Desktop UI rendering remains outside coverage.
+- `verify:engram:host` has a separate HonestCI gate: five required tests, zero skips. CI now runs both memory tiers on Ubuntu and macOS.
+- The known migration limitation was submitted for design discussion: https://github.com/kenz1117/dsh-engram/issues/3 . No core migration change or upstream acceptance is claimed.
+- Public case study: `docs/ENGRAM-CASE-STUDY.md`. The two red safety tests remain separately runnable; their failures are preserved.

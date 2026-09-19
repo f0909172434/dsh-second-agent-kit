@@ -85,3 +85,5 @@ python scripts/render-office.py input.docx new-preview-directory --png
 工具組採 [MIT](LICENSE)。各上游 patch 的原授權另存於 `patches/`。本專案不是 DeepSeek 官方產品，不改變其他軟體的授權或服務條款。
 
 桌面 0.15.6 會把本機壓縮包誤判為遺失的資料夾並在啟動時移除，因此請保留上述解壓目錄。Mac 操作每輪連續兩次已知失敗或累積 20 次輸入後，工具層會拒絕繼續輸入；重新觀察畫面不會重置限制。這不等於模型費用的硬性上限。
+
+[技術案例：驗證上游功能、退役重複補丁與保留遷移限制](docs/ENGRAM-CASE-STUDY.md)
