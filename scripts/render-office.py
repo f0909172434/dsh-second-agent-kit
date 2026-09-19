@@ -39,7 +39,9 @@ def main():
         import pymupdf
         with pymupdf.open(pdf) as document:
             for index, page in enumerate(document):
-                page.get_pixmap(matrix=pymupdf.Matrix(1.5, 1.5)).save(output / f'{source.stem}-page-{index+1}.png')
+                png = output / f'{source.stem}-page-{index+1}.png'
+                page.get_pixmap(matrix=pymupdf.Matrix(1.5, 1.5)).save(png)
+                print(png)
             print(f'Rendered {len(document)} pages; visually inspect every PNG')
     print(pdf)
 

@@ -1,4 +1,5 @@
-export const name = 'daily-approval';
+import {applyRetryGuard} from './retry-guard.mjs';
+export const name = 'second-agent-approval';
 export function approvalReason(exec) {
   const args = exec.arguments ?? {};
   if (exec.name === 'browser_interact' && args.action !== 'hover')
@@ -12,6 +13,7 @@ export function approvalReason(exec) {
   }
 }
 export function apply(ctx) {
+  applyRetryGuard(ctx);
   ctx.on('tools/pre-execute', async (exec, next) => {
     const downstream = await next();
     if (downstream.kind !== 'allow') return downstream;

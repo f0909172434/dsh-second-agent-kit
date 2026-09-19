@@ -1,5 +1,7 @@
 # DSH Second Agent Kit
 
+**English** · [繁體中文](README.zh-TW.md)
+
 Small, inspectable extensions for DeepSeek Harness 0.1.5-rc.2 on macOS. MIT licensed; independent of DSH Desktop's own license.
 
 ## What is included
@@ -10,6 +12,8 @@ Small, inspectable extensions for DeepSeek Harness 0.1.5-rc.2 on macOS. MIT lice
 - An independent LibreOffice renderer (`scripts/render-office.py`) using an isolated profile and explicit macOS system fonts to avoid silent Chinese glyph loss. Requires an official LibreOffice install; `--png` requires PyMuPDF.
 - An experimental macOS computer-use patch (**live Word panel test failed; not enabled by this bundle**). It targets a validated focused file-panel element's system XPC process instead of silently posting keys to the host app. No global input broadcast, stale-observation bypass, or new permanent app grant.
 
+The guard also blocks further Mac input after two consecutive known UI failures or 20 input calls in one agent turn. Observation remains available; a new user turn resets the limit. This limits tool dispatch, not total model spending.
+
 ## Install the guard
 
 Requirements: macOS 14+, Node 24, DSH 0.1.5-rc.2, existing workspace-write + ask mode. Test in a separate profile first.
@@ -18,7 +22,9 @@ Requirements: macOS 14+, Node 24, DSH 0.1.5-rc.2, existing workspace-write + ask
 npm ci
 npm test
 npm pack
-dsh plugin --profile YOUR_TEST_PROFILE add ./dsh-second-agent-kit-0.1.2.tgz
+mkdir -p "$HOME/.dsh/packages/dsh-second-agent-kit-0.1.4"
+tar -xzf dsh-second-agent-kit-0.1.4.tgz -C "$HOME/.dsh/packages/dsh-second-agent-kit-0.1.4"
+dsh plugin --profile YOUR_TEST_PROFILE add "file:$HOME/.dsh/packages/dsh-second-agent-kit-0.1.4/package"
 ```
 
 The bundle disables the upstream `sandbox` row, inserts `second-agent-sandbox` with the restricted provider and inserts `second-agent-approval`. If an earlier local `daily-approval` hook is present, disable that duplicate after validating this plugin. Do not disable DSH's own user-approval plugin. No credentials are required or bundled.
@@ -58,3 +64,5 @@ The helper rejects overwriting a PDF and prints the page count. Inspect every PN
 This is **not a universal semantic firewall**. Regex command recognition is advisory; the kernel rule applies only to processes the host confines. Browser/MCP/GUI/plugin capabilities are separate and must retain their approvals. Public publication, payments and destructive operations still require explicit authorization. Unix-domain sockets remain available for local application IPC (including LibreOffice). Local IPC can reach services or proxies with their own authority; this is not an egress boundary against cooperating local services. An allowed workspace file could affect another process that reads it. This project does not claim to eliminate every IPC or indirect-action channel.
 
 No user credentials, conversation logs, personal documents, or production memory databases belong in this repository. See `VALIDATION.md` for current observed results and unresolved cases.
+
+Desktop 0.15.6 incorrectly treats local tarballs as missing directories and removes them at boot. Keep the extracted directory at a stable path. The per-turn Mac input guard blocks further dispatch after two consecutive recognized failures or 20 inputs; observations do not reset it. It does not impose a token-spending cap.

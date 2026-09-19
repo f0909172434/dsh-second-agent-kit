@@ -1,6 +1,6 @@
 {
   "name": "dsh-second-agent-kit",
-  "version": "0.1.2",
+  "version": "0.1.4",
   "type": "module",
   "license": "MIT",
   "description": "Auditable second-agent safeguards and compatibility patches for DeepSeek Harness on macOS",
@@ -14,7 +14,8 @@
     "src",
     "cordis.patch.yml",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "README.zh-TW.md"
   ],
   "scripts": {
     "test": "node --test tests/*.test.mjs"

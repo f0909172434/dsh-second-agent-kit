@@ -16,3 +16,11 @@ No credentials, live session logs, production databases or user documents are in
 
 - Guard 0.1.2 permits Unix-domain sockets needed by offline application IPC while retaining denied TCP/IP connections and filesystem policy. Kernel tests cover both behaviors. LibreOffice rendering succeeds under this policy; blanket Unix-socket denial in 0.1.1 prevented the application from starting. This deliberately does not claim containment against local IPC proxies.
 - Final desktop 0.1.2 readback: DSH ran the original TCP-denial fixture and the LibreOffice renderer, each once without escalation. Both succeeded; the actual generated one-page Chinese PNG was inspected independently and had no missing glyphs or clipped content.
+
+## 2026-09-20 update
+
+- Kit 0.1.4: 11 tests passed, including actual macOS sandbox checks, host composition, session/turn retry isolation, and downstream approval-ask/deny handling.
+- Desktop 0.15.6 boot removed valid file: tarballs because internal/manifest.rs checks is_dir(). Extracted-directory file: dependencies survive restart; composed daily profile retains the guard, restricted sandbox, Engram and Verified Search. No desktop binary patch.
+- Installed patched Engram runtime again passed concurrent project isolation, update, forget and explicit shared-preference checks with disposable storage. Upstream 0.7.6 passes those tools but changes automatic sharing/profile injection, so daily remains the policy-patched 0.7.5.
+- BrowserSkill plugin/CLI updated to 0.3.0, cost meter 1.7.30, marketplace 1.49.0. Stable backend remains 0.1.5-rc.2, matching the desktop recommendation.
+- Native TextEdit reached the save panel but keyboard actions repeatedly returned stale-observation errors; stopped manually. No successful native save/reopen claim. The new guard is dispatch protection, not a native-dialog repair or token budget cap.
