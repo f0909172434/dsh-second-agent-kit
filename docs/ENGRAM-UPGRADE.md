@@ -82,3 +82,24 @@ verification uses stock 0.7.6. This is **not** a claim that upstream reproduces
 the old patch's project-only automatic ingestion policy: automatic ingestion
 is explicitly outside this offline acceptance and must remain off for this
 validated profile.
+
+## Real host composition acceptance
+
+`npm run verify:engram:host` uses the real Cordis Context, Loader/Include, DSH
+0.1.5-rc.2 webserver, system-prompt and tool runtime. A disposable `cordis.yml`
+loads the unmodified published Engram plugin. Five cases cover registration of
+17 tools, concurrent execution through the host's full tool pipeline, workspace
+selection through the real HTTP routes, HTTP updates/forget reflected in tool
+retrieval, and plugin unload removing tools/routes. All five must run with zero
+skips through a separate HonestCI gate.
+
+Only the LLM service (which throws on every call) and workspace/session input
+records are synthetic. The loader, registry, pipeline, HTTP server and SQLite
+are real. No model calls occur. This closes the lifecycle-context-double gap
+for those behaviors, but does not claim native Desktop UI or browser rendering
+acceptance. `reports/engram-host.xml` and `reports/engram-host-evidence.json`
+record this distinct evidence tier.
+
+`npm run reproduce:upstream-safety` exposes the two **red** ownership tests.
+Expected exit on pinned 0.7.6: 1. This is deliberately separate from passing
+observation tests and is not part of the default green gate.

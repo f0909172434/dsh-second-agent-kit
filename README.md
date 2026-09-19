@@ -38,6 +38,7 @@ Use **unmodified Engram 0.7.6** for the verified offline profile, with automatic
 ```sh
 npm run check:engram-upgrade -- --db-dir /absolute/memory-directory --workspace /absolute/workspace
 npm run verify:engram
+npm run verify:engram:host
 npm run test:migration
 ```
 

@@ -18,6 +18,8 @@ jobs:
       - run: npm test
       - name: Verify stock Engram through HonestCI
         run: npm run verify:engram
+      - name: Verify real DSH host composition through HonestCI
+        run: npm run verify:engram:host
       - name: Reproduce the known migration limitation
         run: npm run test:migration
       - name: Retain acceptance evidence

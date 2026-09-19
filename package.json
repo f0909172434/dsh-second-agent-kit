@@ -26,16 +26,23 @@
     "test:engram": "node --test tests/acceptance/engram.test.mjs",
     "test:migration": "node --test tests/acceptance/migration.test.mjs",
     "test:engram:junit": "node --test --test-reporter=junit --test-reporter-destination=reports/engram-memory.xml tests/acceptance/engram.test.mjs",
-    "verify:engram": "node scripts/verify-engram.mjs"
+    "verify:engram": "node scripts/verify-engram.mjs",
+    "verify:engram:host": "node scripts/verify-engram.mjs host",
+    "reproduce:upstream-safety": "node --test tests/acceptance/engram-migration-safety.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh-sandbox-local": "0.1.5-rc.2"
   },
   "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/cordis-plugin-include": "1.0.7",
+    "@deepseek-ai/cordis-plugin-loader": "1.0.3",
     "@deepseek-ai/dsh-agent": "0.1.5-rc.2",
     "@deepseek-ai/dsh-app-boot": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-host-webserver": "0.1.5-rc.2",
     "@deepseek-ai/dsh-llm": "0.1.5-rc.2",
     "@deepseek-ai/dsh-sandbox-local": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "0.1.5-rc.2",
     "@deepseek-ai/dsh-tools": "0.1.5-rc.2",
     "@kenz1117/dsh-engram": "0.7.6",
     "honest-ci": "1.0.4",

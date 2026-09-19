@@ -40,6 +40,7 @@ dsh plugin --profile YOUR_TEST_PROFILE add "file:$HOME/.dsh/packages/dsh-second-
 ```sh
 npm run check:engram-upgrade -- --db-dir /absolute/memory-directory --workspace /absolute/workspace
 npm run verify:engram
+npm run verify:engram:host
 npm run test:migration
 ```
 
