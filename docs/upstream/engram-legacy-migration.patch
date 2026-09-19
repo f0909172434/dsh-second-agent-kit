@@ -1,0 +1,74 @@
+diff --git a/docs/legacy-migration-proposal.md b/docs/legacy-migration-proposal.md
+new file mode 100644
+index 0000000..98612fd
+--- /dev/null
++++ b/docs/legacy-migration-proposal.md
+@@ -0,0 +1,24 @@
++# Preserve ambiguous legacy ownership during upgrades
++
++Status: local reproduction and design proposal; not submitted or accepted upstream.
++Baseline: Engram 0.7.6, commit `a7639b559e95361fbc0f1dd8723714e77b4b17d6`, Node 24.19.0.
++
++The source already documents this tradeoff in `src/project/identity.ts`: the old filename encodes only the first 12 UTF-8 bytes of a workspace path, and migration gives a shared legacy database to the first workspace opened. This contribution makes that known limitation executable. It does not claim a newly discovered defect or change the existing default.
++
++## Reproduce without installation or API calls
++
++```sh
++node --test scripts/repro-legacy-migration.mjs
++```
++
++Expected on the baseline: **two failed safety tests, exit 1**. In the A-first case both synthetic rows appear under A's new filename; reversing the order assigns both to B. Each case uses a closed real SQLite database with a synthetic table, not the complete Engram schema, and cleans up only its own temporary directory. The tested migration function is imported directly from this checkout; it is not copied or reimplemented by the reproducer.
++
++The observation tests in the downstream kit intentionally pass when they reproduce this behavior. They must not be presented as proof that upstream migration is safe. These separate red tests retain the unmet safety criterion.
++
++## Proposed direction for maintainer discussion
++
++Retain an ambiguous legacy database until its ownership is explicitly resolved. Report the old and proposed filenames before opening a new project store; a warning after renaming cannot undo an ownership decision. A conservative opt-in mode could be introduced first to preserve existing upgrade behavior while allowing callers to refuse automatic assignment. Do not infer that a database belongs exclusively to the only currently registered workspace: historical workspaces may have disappeared.
++
++Do not automatically split, merge, delete, or classify memory content. If provenance is insufficient, report that limitation. Existing new databases should retain their current identity, including intentional sharing between worktrees with the same Git origin. A downstream read-only preflight currently blocks a matching legacy file or sidecar and leaves every file unchanged; it is a preflight, not a transactional lock or a core-policy replacement.
++
++Acceptance for a future policy change: both opening orders preserve unresolved legacy data, existing new databases are untouched, the ambiguity is visible to callers, and clean installations plus deliberate same-origin sharing still work. The default and public error/configuration interface need maintainer agreement before implementing that policy change.
+diff --git a/scripts/repro-legacy-migration.mjs b/scripts/repro-legacy-migration.mjs
+new file mode 100644
+index 0000000..0bfea9c
+--- /dev/null
++++ b/scripts/repro-legacy-migration.mjs
+@@ -0,0 +1,38 @@
++/** Known 0.7.6 limitation, not a new discovery. These safety tests intentionally fail on the pinned baseline. */
++import {test} from 'node:test';
++import assert from 'node:assert/strict';
++import {DatabaseSync} from 'node:sqlite';
++import {mkdtempSync, mkdirSync, existsSync, rmSync} from 'node:fs';
++import {tmpdir} from 'node:os';
++import {join} from 'node:path';
++import {resolveProjectIdentity, migrateProjectDb} from '../src/project/identity.ts';
++
++for (const first of ['A', 'B']) test(`ambiguous legacy ownership must not be assigned by opening ${first} first`, t => {
++  const root = mkdtempSync(join(tmpdir(), 'engram-ownership-'));
++  t.after(() => rmSync(root, {recursive: true, force: true}));
++  const dbDir = join(root, 'db'); mkdirSync(dbDir);
++  const identities = {};
++  for (const name of ['A', 'B']) {
++    const cwd = join(root, 'workspace-' + name); mkdirSync(cwd);
++    identities[name] = resolveProjectIdentity(cwd);
++  }
++  assert.equal(identities.A.legacyDbName, identities.B.legacyDbName);
++  assert.notEqual(identities.A.dbName, identities.B.dbName);
++  const oldPath = join(dbDir, identities.A.legacyDbName);
++  const db = new DatabaseSync(oldPath);
++  db.exec('CREATE TABLE synthetic_memories (workspace TEXT, content TEXT)');
++  for (const name of ['A', 'B']) db.prepare('INSERT INTO synthetic_memories VALUES (?, ?)').run(name, 'synthetic-' + name);
++  db.close();
++  const second = first === 'A' ? 'B' : 'A';
++  const outcomes = [migrateProjectDb(dbDir, identities[first]), migrateProjectDb(dbDir, identities[second])];
++  const destination = join(dbDir, identities[first].dbName);
++  let rows;
++  if (existsSync(destination)) {
++    const migrated = new DatabaseSync(destination, {readOnly: true});
++    try { rows = migrated.prepare('SELECT workspace FROM synthetic_memories ORDER BY workspace').all().map(r => r.workspace); }
++    finally { migrated.close(); }
++  }
++  t.diagnostic(JSON.stringify({first, outcomes, observedOwnerRows: rows, fixture: 'real SQLite / synthetic schema'}));
++  assert(existsSync(oldPath), 'Known limitation: the ambiguous old database was automatically assigned to the first workspace');
++  assert(!existsSync(destination), 'An unconfirmed ownership decision must not create a project destination');
++});
