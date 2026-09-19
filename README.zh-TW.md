@@ -8,7 +8,7 @@
 
 - **操作批准**：保留宿主既有的拒絕／詢問結果，對瀏覽器寫入、接管既有分頁，以及常見發布與刪除命令追加確認。
 - **macOS 程序限制**：沿用官方 Seatbelt provider 的檔案政策，額外阻擋受限 shell 程序的 IP 網路和 Apple Events。本機計算及工作區寫入可繼續；Unix socket 保留供 LibreOffice 等應用在本機通訊。
-- **Engram 0.7.5 修正**：以完整非 Git 工作區路徑建立識別，工具依呼叫會話選擇專案資料庫，自動攝取寫入專案範圍。跨專案偏好須明確指定 user 範圍。
+- **Engram 0.7.6 驗證**：使用未修改的上游版本驗證工作區隔離與明確指定的記憶操作，提供只讀升級檢查及真實 SQLite 遷移重現；0.7.5 舊補丁保留作歷史紀錄。
 - **Office 預覽**：使用獨立安裝的 LibreOffice 與 macOS 系統字型，將文件轉成 PDF 和逐頁 PNG，避免中文字型缺失未被發現。
 - **相容性修正記錄**：包含 Verified Search patch，以及未通過實機驗收的 computer-use 實驗 patch。後者不會由本套件安裝或啟用。
 
@@ -33,19 +33,19 @@ dsh plugin --profile YOUR_TEST_PROFILE add "file:$HOME/.dsh/packages/dsh-second-
 
 不支援的沙箱執行器會明確失敗；不會偷偷改成未受限執行。此版本僅支援 macOS，Linux CI 只驗證可攜邏輯，不代表 Linux 部署已受支援。不要永久啟用 `danger-full-access`；該模式本來就不經宿主的程序限制。網路命令需要宿主既有的逐次提權與使用者批准。
 
-## 記憶修正與驗證
+## 記憶驗證與升級檢查
 
-取得官方 `@kenz1117/dsh-engram@0.7.5` npm 封裝並解開，再執行：
+已驗證的離線配置使用原版 **Engram 0.7.6**，關閉自動攝取及查詢改寫。啟動升級版插件前，先檢查既有記憶目錄；回傳非零時停止升級：
 
 ```sh
-python3 scripts/patch-engram.py /path/to/pristine-package /path/to/new-package
-# 在測試 profile 安裝修正版及其依賴之後：
-DSH_ENGRAM_MODULE=/path/to/installed/patched/lib/index.js node tests/memory-runtime.mjs
+npm run check:engram-upgrade -- --db-dir /absolute/memory-directory --workspace /absolute/workspace
+npm run verify:engram
+npm run test:migration
 ```
 
-此測試以可丟棄的資料庫呼叫真實記憶工具，檢查並行專案隔離、更新、忘記及明確的 user 範圍共享；不呼叫付費模型。需要插件自己的本機嵌入模型；`DSH_EMBEDDING_CACHE` 可指定既有快取。
+檢查只讀取檔名與 Git 識別資訊，不開啟記憶內容、不搬移或合併資料。記憶驗收使用真實插件與 SQLite，透過 HonestCI 要求六項測試全部執行、不可跳過。上游舊庫的歸屬歧義仍未解決；重現成功不等於遷移安全。詳見[升級指引及限制](docs/ENGRAM-UPGRADE.md)。
 
-相同 Git origin 的工作區刻意共享專案記憶。舊資料庫不會自動遷移，設定介面的專案視圖仍受宿主工作目錄影響。升級或搬移正式記憶前，先備份並測試。
+`scripts/patch-engram.py` 與 `tests/memory-runtime.mjs` 保留為 0.7.5 歷史實驗，不是新版的預設安裝步驟。自動攝取政策、向量檢索品質與原生桌面尚未納入本輪驗收。
 
 ## 文件轉檔
 

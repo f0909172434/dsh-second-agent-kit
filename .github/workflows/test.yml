@@ -16,3 +16,13 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npm test
+      - name: Verify stock Engram through HonestCI
+        run: npm run verify:engram
+      - name: Reproduce the known migration limitation
+        run: npm run test:migration
+      - name: Retain acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engram-evidence-${{ matrix.os }}
+          path: reports/

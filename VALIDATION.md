@@ -24,3 +24,16 @@ No credentials, live session logs, production databases or user documents are in
 - Installed patched Engram runtime again passed concurrent project isolation, update, forget and explicit shared-preference checks with disposable storage. Upstream 0.7.6 passes those tools but changes automatic sharing/profile injection, so daily remains the policy-patched 0.7.5.
 - BrowserSkill plugin/CLI updated to 0.3.0, cost meter 1.7.30, marketplace 1.49.0. Stable backend remains 0.1.5-rc.2, matching the desktop recommendation.
 - Native TextEdit reached the save panel but keyboard actions repeatedly returned stale-observation errors; stopped manually. No successful native save/reopen claim. The new guard is dispatch protection, not a native-dialog repair or token budget cap.
+
+
+## 2026-09-20 — stock Engram upgrade verification (local development branch)
+
+- Node 24.19.0, DSH dependencies pinned to 0.1.5-rc.2; unmodified published Engram 0.7.6 library byte-matched to the npm archive.
+- General kit suite: 24/24 passed, zero skipped, including the existing real macOS kernel checks and six HonestCI positive/negative controls.
+- Memory gate: six cases passed, zero skipped, through HonestCI 1.0.4 using native Node JUnit. No trusted default-branch baseline exists yet; the explicit six-test minimum and zero-skip limit are active.
+- Direct plugin-tool execution used a small lifecycle context double, real temporary SQLite stores and the native keyword fallback. External fetch was blocked. No paid model calls, model downloads, or production memory access occurred. This is not a live Desktop/GUI or vector-search acceptance.
+- Two real SQLite observation tests reproduce upstream's documented first-open ownership behavior. The two independent proposed safety tests FAIL on the upstream baseline as expected; upstream migration safety is NOT ACCEPTED. The database schema in this migration-only fixture is synthetic.
+- The read-only checker blocks matching legacy files, coexisting old/new files and sidecars, with byte preservation verified. A packaged CLI smoke test passes (clean exit 0; ambiguous exit 1; no content printed).
+- Old 0.7.5 patch retained as historical evidence. Verified offline operations now use stock 0.7.6; equivalence of automatic-ingestion policies is not claimed.
+- The existing js-yaml 4.1.1 direct development dependency was updated to 4.3.2 after a concrete audit finding; the resulting dependency audit reports zero vulnerabilities.
+- At the time of this local acceptance, GitHub CI had not run remotely. Remote verification is tracked in the kit pull request. Engram upstream files remain a local contribution proposal, not a submitted or accepted change.

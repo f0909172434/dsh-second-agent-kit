@@ -8,7 +8,7 @@ Small, inspectable extensions for DeepSeek Harness 0.1.5-rc.2 on macOS. MIT lice
 
 - A Cordis plugin that preserves upstream decisions and asks before browser writes, borrowing tabs, and common publishing/deletion commands.
 - A subclass of the existing DSH Seatbelt provider. It preserves the host's filesystem policy and denies IP networking and Apple Events in **confined shell processes**. Local computation and workspace writes continue to work. Shell network requests need the host's existing per-call escalation and user approval; dedicated browser, web and model tools use their own policy.
-- A reproducible, version-pinned Engram 0.7.5 patch: hash the entire non-Git workspace path; bind tool storage to the session workspace using AsyncLocalStorage; direct automatic ingestion to project storage. User preferences remain explicit cross-project memories.
+- Stock Engram 0.7.6 verification, a read-only upgrade preflight, and real SQLite migration reproductions. The old 0.7.5 patch is retained as history; verified routing and explicit memory operations now use upstream.
 - An independent LibreOffice renderer (`scripts/render-office.py`) using an isolated profile and explicit macOS system fonts to avoid silent Chinese glyph loss. Requires an official LibreOffice install; `--png` requires PyMuPDF.
 - An experimental macOS computer-use patch (**live Word panel test failed; not enabled by this bundle**). It targets a validated focused file-panel element's system XPC process instead of silently posting keys to the host app. No global input broadcast, stale-observation bypass, or new permanent app grant.
 
@@ -31,17 +31,19 @@ The bundle disables the upstream `sandbox` row, inserts `second-agent-sandbox` w
 
 Unsupported sandbox runners fail closed rather than silently returning an unconfined command. This version is deliberately macOS-only. Do not enable danger-full-access as a standing default: that mode bypasses the host's confinement by design.
 
-## Engram patch and test
+## Engram verification and upgrade check
 
-Extract the official `@kenz1117/dsh-engram@0.7.5` npm tarball, then:
+Use **unmodified Engram 0.7.6** for the verified offline profile, with automatic ingestion and query rewriting disabled. Before upgrading an existing memory directory, run the read-only preflight and stop on any nonzero exit:
 
 ```sh
-python3 scripts/patch-engram.py /path/to/pristine-package /path/to/new-package
-# Resolve the patched package's dependencies in an isolated test profile first.
-DSH_ENGRAM_MODULE=/path/to/installed/patched/lib/index.js node tests/memory-runtime.mjs
+npm run check:engram-upgrade -- --db-dir /absolute/memory-directory --workspace /absolute/workspace
+npm run verify:engram
+npm run test:migration
 ```
 
-The runtime test invokes real memory tools against disposable databases and covers concurrent project isolation, updates, forgetting, and explicit user sharing. It needs the package's local embedding runtime; `DSH_EMBEDDING_CACHE` may point to an existing cache. No paid LLM calls are made by this test. Equal Git origins intentionally share memory. Existing legacy database migration is not automatic; the settings UI still uses the host workspace. Test before upgrading or migrating real memories.
+The check never opens memory contents or migrates files. It detects ambiguous legacy filenames for supplied workspaces. Verification runs six real-plugin/SQLite cases through HonestCI with zero skipped tests allowed. Upstream's legacy ownership ambiguity remains unresolved; reproducing it is not a safety pass. See [upgrade guidance and boundaries](docs/ENGRAM-UPGRADE.md).
+
+The original `scripts/patch-engram.py` and `tests/memory-runtime.mjs` remain historical 0.7.5 artifacts, not instructions for the new default profile.
 
 ## Computer-use patch
 
