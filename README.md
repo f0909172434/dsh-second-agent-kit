@@ -1,5 +1,16 @@
 # DSH Second Agent Kit
 
+## Upstream status (2026-09-30)
+
+[Engram PR #4](https://github.com/kenz1117/dsh-engram/pull/4) was merged on
+2026-09-21 and shipped in [v0.7.7](https://github.com/kenz1117/dsh-engram/releases/tag/v0.7.7).
+It adds opt-in `legacyMigration: conservative` and JSON migration-claim sidecars.
+The default remains eager; this does not reconstruct ownership or make migration
+crash-atomic. This kit still pins 0.7.6 as its reproducible verification baseline;
+its red safety tests and observations describe that version, not a failed review
+of 0.7.7. Revalidating and upgrading the runtime is separate work.
+
+
 **English** · [繁體中文](README.zh-TW.md)
 
 Small, inspectable extensions for DeepSeek Harness 0.1.5-rc.2 on macOS. MIT licensed; independent of DSH Desktop's own license.
@@ -42,7 +53,7 @@ npm run verify:engram:host
 npm run test:migration
 ```
 
-The check never opens memory contents or migrates files. It detects ambiguous legacy filenames for supplied workspaces. Verification runs six real-plugin/SQLite cases through HonestCI with zero skipped tests allowed. Upstream's legacy ownership ambiguity remains unresolved; reproducing it is not a safety pass. See [upgrade guidance and boundaries](docs/ENGRAM-UPGRADE.md).
+The check never opens memory contents or migrates files. It detects ambiguous legacy filenames for supplied workspaces. Verification runs six real-plugin/SQLite cases through HonestCI with zero skipped tests allowed. The pinned 0.7.6 baseline retains legacy ownership ambiguity; reproducing it is not a safety pass. See [upgrade guidance and boundaries](docs/ENGRAM-UPGRADE.md).
 
 The original `scripts/patch-engram.py` and `tests/memory-runtime.mjs` remain historical 0.7.5 artifacts, not instructions for the new default profile.
 

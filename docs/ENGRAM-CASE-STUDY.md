@@ -1,5 +1,16 @@
 # Replacing a local memory patch with verified upstream behavior
 
+## Upstream status (2026-09-30)
+
+[Engram PR #4](https://github.com/kenz1117/dsh-engram/pull/4) was merged on
+2026-09-21 and shipped in [v0.7.7](https://github.com/kenz1117/dsh-engram/releases/tag/v0.7.7).
+It adds opt-in `legacyMigration: conservative` and JSON migration-claim sidecars.
+The default remains eager; this does not reconstruct ownership or make migration
+crash-atomic. This kit still pins 0.7.6 as its reproducible verification baseline;
+its red safety tests and observations describe that version, not a failed review
+of 0.7.7. Revalidating and upgrading the runtime is separate work.
+
+
 這個案例展示如何查核上游已實現的功能、退役重複補丁，並針對仍存在的資料遷移限制交付可重跑證據。沒有另建記憶框架或測試平台。
 
 ## Problem and decision
@@ -8,7 +19,7 @@ The kit previously carried a patch for Engram 0.7.5: full-path identities for no
 
 We selected the unmodified published 0.7.6 package for explicit memory operations and verified it before changing the recommended path. The historical patch remains available. We did not claim equivalence for automatic ingestion; it is off in the accepted profile.
 
-A separate known limitation remains. Old filenames encode only the first 12 UTF-8 bytes of cwd, so different same-prefix workspaces can share a legacy database. The new identities differ, but automatic migration gives the entire old file to whichever workspace opens first. Upstream already documents this tradeoff.
+A separate known limitation remains in the pinned 0.7.6 baseline. Old filenames encode only the first 12 UTF-8 bytes of cwd, so different same-prefix workspaces can share a legacy database. The new identities differ, but automatic migration gives the entire old file to whichever workspace opens first. Upstream already documents this tradeoff.
 
 ## Contribution
 
@@ -31,7 +42,7 @@ The real host test loads a disposable `cordis.yml`. Workspace/session input reco
 ## Before / after
 
 - Before: the local patch was the documented starting point. After: verified explicit operations use published upstream 0.7.6; historical policy differences remain visible.
-- Before: opening a colliding old database could choose ownership implicitly. After: the kit's preflight flags it before a recommended upgrade; **the upstream automatic migration policy is unchanged**.
+- Before: opening a colliding old database could choose ownership implicitly. After: the kit's preflight flags it before a recommended upgrade; **this kit does not change the pinned 0.7.6 automatic migration policy**.
 - Before: direct-tool tests used a lifecycle double. After: an additional suite exercises actual plugin loading, the execution pipeline, HTTP project selection and unload behavior.
 - Before: local results only. After: the pull request runs both memory evidence tiers on Linux and macOS and retains JUnit plus HonestCI artifacts.
 
@@ -52,7 +63,7 @@ npm run test:migration
 npm run reproduce:upstream-safety
 ```
 
-The positive observation tests show that the documented limitation was reproduced; they do not turn migration safety green. The separate red tests retain the unmet criterion. The upstream issue asks about an opt-in conservative policy before implementing a core behavior change. Submission is complete; maintainer acceptance is not claimed.
+The positive observation tests show that the documented limitation was reproduced; they do not turn migration safety green. The separate red tests retain the unmet criterion. The original design discussion led to merged upstream PR #4 and release 0.7.7, as recorded above. These baseline tests remain pinned to 0.7.6 and do not validate the newer policy.
 
 ## Bounds on the result
 
