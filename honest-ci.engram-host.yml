@@ -1,0 +1,10 @@
+version: 1
+reports:
+  - name: engram-real-host
+    paths: [reports/engram-host.xml]
+    format: junit
+    min_tests: 5
+    max_drop_percent: 0
+    max_skipped_percent: 0
+workflows:
+  paths: [.github/workflows/test.yml]

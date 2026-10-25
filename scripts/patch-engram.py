@@ -1,3 +1,4 @@
+# Historical 0.7.5 experiment; not the default upgrade path. See docs/ENGRAM-UPGRADE.md.
 from pathlib import Path
 import shutil,json
 import argparse

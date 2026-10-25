@@ -1,0 +1,10 @@
+version: 1
+reports:
+  - name: engram-memory
+    paths: [reports/engram-memory.xml]
+    format: junit
+    min_tests: 6
+    max_drop_percent: 0
+    max_skipped_percent: 0
+workflows:
+  paths: [.github/workflows/test.yml]

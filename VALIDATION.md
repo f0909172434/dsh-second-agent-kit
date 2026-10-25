@@ -24,3 +24,51 @@ No credentials, live session logs, production databases or user documents are in
 - Installed patched Engram runtime again passed concurrent project isolation, update, forget and explicit shared-preference checks with disposable storage. Upstream 0.7.6 passes those tools but changes automatic sharing/profile injection, so daily remains the policy-patched 0.7.5.
 - BrowserSkill plugin/CLI updated to 0.3.0, cost meter 1.7.30, marketplace 1.49.0. Stable backend remains 0.1.5-rc.2, matching the desktop recommendation.
 - Native TextEdit reached the save panel but keyboard actions repeatedly returned stale-observation errors; stopped manually. No successful native save/reopen claim. The new guard is dispatch protection, not a native-dialog repair or token budget cap.
+
+
+## 2026-09-20 — stock Engram upgrade verification (local development branch)
+
+- Node 24.19.0, DSH dependencies pinned to 0.1.5-rc.2; unmodified published Engram 0.7.6 library byte-matched to the npm archive.
+- General kit suite: 24/24 passed, zero skipped, including the existing real macOS kernel checks and six HonestCI positive/negative controls.
+- Memory gate: six cases passed, zero skipped, through HonestCI 1.0.4 using native Node JUnit. No trusted default-branch baseline exists yet; the explicit six-test minimum and zero-skip limit are active.
+- Direct plugin-tool execution used a small lifecycle context double, real temporary SQLite stores and the native keyword fallback. External fetch was blocked. No paid model calls, model downloads, or production memory access occurred. This is not a live Desktop/GUI or vector-search acceptance.
+- Two real SQLite observation tests reproduce upstream's documented first-open ownership behavior. The two independent proposed safety tests FAIL on the upstream baseline as expected; upstream migration safety is NOT ACCEPTED. The database schema in this migration-only fixture is synthetic.
+- The read-only checker blocks matching legacy files, coexisting old/new files and sidecars, with byte preservation verified. A packaged CLI smoke test passes (clean exit 0; ambiguous exit 1; no content printed).
+- Old 0.7.5 patch retained as historical evidence. Verified offline operations now use stock 0.7.6; equivalence of automatic-ingestion policies is not claimed.
+- The existing js-yaml 4.1.1 direct development dependency was updated to 4.3.2 after a concrete audit finding; the resulting dependency audit reports zero vulnerabilities.
+- At the time of this local acceptance, GitHub CI had not run remotely. Remote verification is tracked in the kit pull request. Engram upstream files remain a local contribution proposal, not a submitted or accepted change.
+
+
+## 2026-09-20 — actual host composition and upstream submission
+
+- Five additional cases pass locally through the real Cordis Context, Loader/Include, DSH tool execution pipeline and loopback HTTP server, using the published Engram package and disposable configuration/databases.
+- The host suite uses synthetic workspace/session inputs and an LLM service that rejects all calls; model-call count remains zero. The lifecycle context and tool pipeline are no longer doubles in this separate tier. Desktop UI rendering remains outside coverage.
+- `verify:engram:host` has a separate HonestCI gate: five required tests, zero skips. CI now runs both memory tiers on Ubuntu and macOS.
+- The known migration limitation was submitted for design discussion: https://github.com/kenz1117/dsh-engram/issues/3 . No core migration change or upstream acceptance is claimed.
+- Public case study: `docs/ENGRAM-CASE-STUDY.md`. The two red safety tests remain separately runnable; their failures are preserved.
+
+
+## Upstream status (2026-09-30)
+
+[Engram PR #4](https://github.com/kenz1117/dsh-engram/pull/4) was merged on
+2026-09-21 and shipped in [v0.7.7](https://github.com/kenz1117/dsh-engram/releases/tag/v0.7.7).
+It adds opt-in `legacyMigration: conservative` and JSON migration-claim sidecars.
+The default remains eager; this does not reconstruct ownership or make migration
+crash-atomic. This kit still pins 0.7.6 as its reproducible verification baseline;
+its red safety tests and observations describe that version, not a failed review
+of 0.7.7. Revalidating and upgrading the runtime is separate work.
+
+The dated September 20 entries below/above are historical observations, superseded by this upstream-status update. The original reproducer patch remains unchanged as historical evidence.
+
+## 2026-09-30 — Linux repair verification
+
+- Kept the PR's existing pinned js-yaml 4.3.2 dependency and lockfile, fixing the audited 4.1.1 baseline without a broad dependency update.
+- `npm ci --ignore-scripts`: passed with a workspace-writable npm cache.
+- `npm test`: 21 passed, 3 macOS-only skips, zero failures.
+- `npm run verify:engram`: 6 passed, zero failures/errors/skips.
+- `npm run verify:engram:host`: 5 passed, zero failures/errors/skips.
+- `npm run test:migration`: 2 observation cases passed.
+- `npm run reproduce:upstream-safety`: the 2 expected red tests still fail on pinned 0.7.6; no safety pass is claimed.
+- `npm audit`: 0 vulnerabilities. `git diff --check`: passed.
+- Both HonestCI gates retain the explicit missing trusted-baseline warning.
+- No production memory, model calls, upstream runtime upgrade, remote publication or PR-body edit occurred.
