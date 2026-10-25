@@ -46,3 +46,29 @@ No credentials, live session logs, production databases or user documents are in
 - `verify:engram:host` has a separate HonestCI gate: five required tests, zero skips. CI now runs both memory tiers on Ubuntu and macOS.
 - The known migration limitation was submitted for design discussion: https://github.com/kenz1117/dsh-engram/issues/3 . No core migration change or upstream acceptance is claimed.
 - Public case study: `docs/ENGRAM-CASE-STUDY.md`. The two red safety tests remain separately runnable; their failures are preserved.
+
+
+## Upstream status (2026-09-30)
+
+[Engram PR #4](https://github.com/kenz1117/dsh-engram/pull/4) was merged on
+2026-09-21 and shipped in [v0.7.7](https://github.com/kenz1117/dsh-engram/releases/tag/v0.7.7).
+It adds opt-in `legacyMigration: conservative` and JSON migration-claim sidecars.
+The default remains eager; this does not reconstruct ownership or make migration
+crash-atomic. This kit still pins 0.7.6 as its reproducible verification baseline;
+its red safety tests and observations describe that version, not a failed review
+of 0.7.7. Revalidating and upgrading the runtime is separate work.
+
+The dated September 20 entries below/above are historical observations, superseded by this upstream-status update. The original reproducer patch remains unchanged as historical evidence.
+
+## 2026-09-30 — Linux repair verification
+
+- Kept the PR's existing pinned js-yaml 4.3.2 dependency and lockfile, fixing the audited 4.1.1 baseline without a broad dependency update.
+- `npm ci --ignore-scripts`: passed with a workspace-writable npm cache.
+- `npm test`: 21 passed, 3 macOS-only skips, zero failures.
+- `npm run verify:engram`: 6 passed, zero failures/errors/skips.
+- `npm run verify:engram:host`: 5 passed, zero failures/errors/skips.
+- `npm run test:migration`: 2 observation cases passed.
+- `npm run reproduce:upstream-safety`: the 2 expected red tests still fail on pinned 0.7.6; no safety pass is claimed.
+- `npm audit`: 0 vulnerabilities. `git diff --check`: passed.
+- Both HonestCI gates retain the explicit missing trusted-baseline warning.
+- No production memory, model calls, upstream runtime upgrade, remote publication or PR-body edit occurred.

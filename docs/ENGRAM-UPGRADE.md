@@ -1,5 +1,16 @@
 # Engram 0.7.6 upgrade verification
 
+## Upstream status (2026-09-30)
+
+[Engram PR #4](https://github.com/kenz1117/dsh-engram/pull/4) was merged on
+2026-09-21 and shipped in [v0.7.7](https://github.com/kenz1117/dsh-engram/releases/tag/v0.7.7).
+It adds opt-in `legacyMigration: conservative` and JSON migration-claim sidecars.
+The default remains eager; this does not reconstruct ownership or make migration
+crash-atomic. This kit still pins 0.7.6 as its reproducible verification baseline;
+its red safety tests and observations describe that version, not a failed review
+of 0.7.7. Revalidating and upgrading the runtime is separate work.
+
+
 The supported verification target is the **unmodified published** Engram 0.7.6
 with DSH packages 0.1.5-rc.2 and Node 24. The old 0.7.5 patch remains historical;
 it is no longer the recommended path for the behaviors verified here.
@@ -59,7 +70,7 @@ Artifacts: `reports/engram-memory.xml`, `reports/engram-evidence.json`.
 CI runs the memory gate on Linux and macOS. macOS-only kernel tests are a
 separate suite; Linux skips do not count as memory acceptance.
 
-## Known migration limitation — still unresolved upstream
+## Known migration limitation in the pinned 0.7.6 baseline
 
 Engram's old filename encoded only the first 12 **UTF-8 bytes** of the cwd.
 Multiple workspaces can therefore have one legacy database. In 0.7.6 the first

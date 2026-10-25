@@ -44,7 +44,7 @@ npm run verify:engram:host
 npm run test:migration
 ```
 
-檢查只讀取檔名與 Git 識別資訊，不開啟記憶內容、不搬移或合併資料。記憶驗收使用真實插件與 SQLite，透過 HonestCI 要求六項測試全部執行、不可跳過。上游舊庫的歸屬歧義仍未解決；重現成功不等於遷移安全。詳見[升級指引及限制](docs/ENGRAM-UPGRADE.md)。
+檢查只讀取檔名與 Git 識別資訊，不開啟記憶內容、不搬移或合併資料。記憶驗收使用真實插件與 SQLite，透過 HonestCI 要求六項測試全部執行、不可跳過。固定的 0.7.6 基準仍有舊庫歸屬歧義；重現成功不等於遷移安全。上游 [PR #4](https://github.com/kenz1117/dsh-engram/pull/4) 已於 2026-09-21 合併並隨 [0.7.7](https://github.com/kenz1117/dsh-engram/releases/tag/v0.7.7) 發布，新增 conservative 選項及遷移歸屬 sidecar。本套件尚未驗證或升級至該版本。詳見[升級指引及限制](docs/ENGRAM-UPGRADE.md)。
 
 `scripts/patch-engram.py` 與 `tests/memory-runtime.mjs` 保留為 0.7.5 歷史實驗，不是新版的預設安裝步驟。自動攝取政策、向量檢索品質與原生桌面尚未納入本輪驗收。
 
